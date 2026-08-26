@@ -167,7 +167,11 @@ spec:
         resources:
           {{- toYaml . | nindent 10 }}
         {{- end }}
-        {{- if or $appConfig.env $appConfig.extraEnv $.Values.secretEnvAsEnv }}
+        {{- $mountSharedSecrets := true }}
+        {{- if hasKey $appConfig "mountSharedSecrets" }}
+        {{- $mountSharedSecrets = $appConfig.mountSharedSecrets }}
+        {{- end }}
+        {{- if or $appConfig.env $appConfig.extraEnv $appConfig.secretEnv (and $mountSharedSecrets $.Values.secretEnvAsEnv) }}
         env:
         {{- /* Auto-generate common env vars */ -}}
         {{- $autoEnv := dict }}
@@ -191,10 +195,12 @@ spec:
         {{- end }}
         {{- /* Inline secretEnv when secretEnvAsEnv is true (Kind/local dev) */ -}}
         {{- if $.Values.secretEnvAsEnv }}
+        {{- if $mountSharedSecrets }}
         {{- range $key, $value := $.Values.secretEnv }}
         {{- if $value }}
         - name: {{ $key }}
           value: {{ $value | quote }}
+        {{- end }}
         {{- end }}
         {{- end }}
         {{- range $key, $value := $appConfig.secretEnv }}
@@ -217,9 +223,9 @@ spec:
         {{- end }}
         {{- end }}
         {{- end }}
-        {{- if or $appConfig.envFrom (and $.Values.sharedSecrets.enabled $.Values.sharedSecrets.autoMount) }}
+        {{- if or $appConfig.envFrom (and $mountSharedSecrets $.Values.sharedSecrets.enabled $.Values.sharedSecrets.autoMount) }}
         envFrom:
-        {{- if and $.Values.sharedSecrets.enabled $.Values.sharedSecrets.autoMount }}
+        {{- if and $mountSharedSecrets $.Values.sharedSecrets.enabled $.Values.sharedSecrets.autoMount }}
         - secretRef:
             name: {{ $.Values.sharedSecrets.targetSecretName | default (printf "%s-credentials" $.Values.project.name) }}
         {{- end }}

@@ -94,6 +94,7 @@ format failures for the new tool package.
 
 ## Related Skills
 
+- `aiq-configure-workflow`
 - `aiq-add-data-source`
 - `aiq-release-qa`
 - `aiq-prepare-pr`

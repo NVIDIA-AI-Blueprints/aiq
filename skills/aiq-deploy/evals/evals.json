@@ -27,5 +27,17 @@
       "Runs basic validation",
       "Reports the verified AIQ_SERVER_URL"
     ]
+  },
+  {
+    "id": "aiq-deploy-003-negative-research-request",
+    "question": "Use AI-Q to write a deep research report about GPU memory optimization.",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "The agent does not use aiq-deploy for a research request. It should use aiq-research if a backend is already available, or only route to deployment if no backend exists.",
+    "expected_behavior": [
+      "Does not route to aiq-deploy as the primary skill",
+      "Does not ask for deployment mode immediately",
+      "Does not start services before checking whether an AI-Q backend is available"
+    ]
   }
 ]

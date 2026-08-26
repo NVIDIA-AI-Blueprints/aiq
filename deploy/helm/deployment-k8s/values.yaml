@@ -37,7 +37,7 @@ aiq:
         targetMemoryUtilizationPercentage: 80
       image:
         repository: nvcr.io/nvidia/blueprint/aiq-agent
-        tag: "2.0.0"
+        tag: "2.2.0"
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
@@ -49,7 +49,7 @@ aiq:
         enabled: true
         livenessProbe:
           httpGet:
-            path: /health
+            path: /live
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 15
@@ -90,6 +90,15 @@ aiq:
         COLLECTION_NAME: default_collection
         AIQ_CHROMA_DIR: /app/data/chroma
         MODE: web
+        # Upload validation (keep aligned with the frontend)
+        FILE_UPLOAD_ACCEPTED_TYPES: .pdf,.docx,.txt,.md
+        FILE_UPLOAD_MAX_SIZE_MB: '100'
+        FILE_UPLOAD_MAX_FILE_COUNT: '10'
+        # Default-on deep-research admission control
+        AIQ_MAX_DEEP_RESEARCH_INPUT_CHARS: '32768'
+        AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_PER_PRINCIPAL: '5'
+        AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_GLOBAL: '50'
+        AIQ_MAX_DEEP_RESEARCH_SUBMISSIONS_PER_MINUTE: '20'
       labels:
         component: backend
       route:
@@ -206,7 +215,7 @@ aiq:
         targetCPUUtilizationPercentage: 80
       image:
         repository: nvcr.io/nvidia/blueprint/aiq-frontend
-        tag: "2.0.0"
+        tag: "2.2.0"
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:

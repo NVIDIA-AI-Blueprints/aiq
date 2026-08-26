@@ -639,6 +639,41 @@ describe('useDeepResearch', () => {
       )
     })
 
+    test('records a real responseCompletedAt only when the terminal event arrives', async () => {
+      await setupConnectedHook({
+        reportContent: 'Test report',
+        activeDeepResearchMessageId: 'msg-dur',
+      })
+
+      vi.mocked(useChatStore).getState = vi.fn(() => ({
+        ...mockStoreState,
+        reportContent: 'Test report',
+        deepResearchLLMSteps: [],
+        deepResearchToolCalls: [],
+        deepResearchCitations: [],
+        addErrorCard: mockAddErrorCard,
+        deepResearchOwnerConversationId: 'test-conv-123',
+        activeDeepResearchMessageId: 'msg-dur',
+      })) as unknown as typeof useChatStore.getState
+
+      act(() => {
+        mockClient?.callbacks.onWorkflowStart?.('researcher-agent', 'query', 'event-1', 'agent-1')
+      })
+
+      const midRunPatch = mockPatchConversationMessage.mock.calls.find(
+        ([, , patch]) => (patch as Record<string, unknown>).responseCompletedAt !== undefined
+      )
+      expect(midRunPatch).toBeUndefined()
+
+      act(() => {
+        mockClient?.callbacks.onJobStatus?.('success', undefined)
+      })
+
+      const terminalPatch = mockPatchConversationMessage.mock.calls.at(-1)?.[2] as Record<string, unknown>
+      expect(terminalPatch.deepResearchJobStatus).toBe('success')
+      expect(terminalPatch.responseCompletedAt).toBeInstanceOf(Date)
+    })
+
     test('onJobStatus failure stops todos and shows error', async () => {
       await setupConnectedHook()
 
@@ -898,6 +933,67 @@ describe('useDeepResearch', () => {
       ])
     })
 
+    test('replay buffer keeps a start-only workflow agent running after refresh', async () => {
+      await setupBufferedHook()
+
+      act(() => {
+        mockClient?.callbacks.onWorkflowStart?.(
+          'researcher-agent',
+          'Research query',
+          'event-1',
+          'researcher-1'
+        )
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      const agents = updates.deepResearchAgents as Array<Record<string, unknown>>
+
+      expect(agents).toHaveLength(1)
+      expect(agents[0]).toMatchObject({
+        id: 'researcher-1',
+        name: 'researcher-agent',
+        status: 'running',
+      })
+      expect(agents[0]).not.toHaveProperty('completedAt')
+    })
+
+    test('replay buffer completes a workflow agent only after workflow.end', async () => {
+      await setupBufferedHook()
+
+      act(() => {
+        mockClient?.callbacks.onWorkflowStart?.(
+          'researcher-agent',
+          'Research query',
+          'event-1',
+          'researcher-1'
+        )
+        mockClient?.callbacks.onWorkflowEnd?.(
+          'researcher-agent',
+          'Research notes',
+          'event-2',
+          'researcher-1'
+        )
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      const agents = updates.deepResearchAgents as Array<Record<string, unknown>>
+
+      expect(agents[0]).toMatchObject({
+        id: 'researcher-1',
+        status: 'complete',
+        output: 'Research notes',
+        completedAt: expect.any(Date),
+      })
+    })
+
     test('replay buffer ignores workflow-scoped sub-agent todos after refresh', async () => {
       await setupBufferedHook()
 
@@ -919,6 +1015,109 @@ describe('useDeepResearch', () => {
       expect(updates).not.toHaveProperty('deepResearchTodos')
     })
 
+    test('replay buffer merges file content with a later metadata-only update', async () => {
+      await setupBufferedHook()
+
+      act(() => {
+        // Legacy content event, then a durable metadata-only event for the same file.
+        // Replay must merge (not overwrite) so the earlier content survives.
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'chart.png', content: 'BASE64DATA' })
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'chart.png', artifactId: 'art-1', mimeType: 'image/png' })
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      expect(replayCommit).toEqual(expect.any(Function))
+
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      const files = updates.deepResearchFiles as Array<Record<string, unknown>>
+      expect(files).toHaveLength(1)
+      expect(files[0]).toMatchObject({
+        filename: 'chart.png',
+        content: 'BASE64DATA',
+        artifactId: 'art-1',
+        mimeType: 'image/png',
+      })
+    })
+
+    test('replay buffer keeps interleaved same-tool outputs id-keyed to each worker', async () => {
+      await setupBufferedHook()
+
+      act(() => {
+        mockClient?.callbacks.onToolStart?.('web_search', { q: 'a' }, 'researcher-agent', 'e1', 'researcher-1', false)
+        mockClient?.callbacks.onToolStart?.('web_search', { q: 'b' }, 'researcher-agent', 'e2', 'researcher-2', false)
+        mockClient?.callbacks.onToolEnd?.('web_search', 'result A', 'e3', 'researcher-1')
+        mockClient?.callbacks.onToolEnd?.('web_search', 'result B', 'e4', 'researcher-2')
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      const toolCalls = updates.deepResearchToolCalls as Array<Record<string, unknown>>
+      const rowA = toolCalls.find((t) => t.agentId === 'researcher-1')
+      const rowB = toolCalls.find((t) => t.agentId === 'researcher-2')
+
+      expect(rowA?.input).toEqual({ q: 'a' })
+      expect(rowB?.input).toEqual({ q: 'b' })
+      expect(String(rowA?.output)).toContain('result A')
+      expect(String(rowA?.output)).not.toContain('result B')
+      expect(String(rowB?.output)).toContain('result B')
+      expect(String(rowB?.output)).not.toContain('result A')
+    })
+
+    test('replay buffer id-keys same-tool outputs even when the ends arrive out of order', async () => {
+      await setupBufferedHook()
+
+      act(() => {
+        mockClient?.callbacks.onToolStart?.('web_search', { q: 'a' }, 'researcher-agent', 'e1', 'researcher-1', false)
+        mockClient?.callbacks.onToolStart?.('web_search', { q: 'b' }, 'researcher-agent', 'e2', 'researcher-2', false)
+        mockClient?.callbacks.onToolEnd?.('web_search', 'result B', 'e4', 'researcher-2')
+        mockClient?.callbacks.onToolEnd?.('web_search', 'result A', 'e3', 'researcher-1')
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      const toolCalls = updates.deepResearchToolCalls as Array<Record<string, unknown>>
+      const rowA = toolCalls.find((t) => t.agentId === 'researcher-1')
+      const rowB = toolCalls.find((t) => t.agentId === 'researcher-2')
+
+      expect(String(rowA?.output)).toContain('result A')
+      expect(String(rowB?.output)).toContain('result B')
+    })
+
+    test('replay buffer keeps interleaved same-model LLM thinking id-keyed to each worker', async () => {
+      await setupBufferedHook()
+
+      act(() => {
+        mockClient?.callbacks.onLLMStart?.('gpt-4', 'researcher-agent', 'researcher-1')
+        mockClient?.callbacks.onLLMChunk?.('chunk-1')
+        mockClient?.callbacks.onLLMStart?.('gpt-4', 'researcher-agent', 'researcher-2')
+        mockClient?.callbacks.onLLMChunk?.('chunk-2')
+        mockClient?.callbacks.onLLMEnd?.('out A', 'thinking A', { input_tokens: 1, output_tokens: 2 }, 'gpt-4', 'researcher-1')
+        mockClient?.callbacks.onLLMEnd?.('out B', 'thinking B', { input_tokens: 3, output_tokens: 4 }, 'gpt-4', 'researcher-2')
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      const llmSteps = updates.deepResearchLLMSteps as Array<Record<string, unknown>>
+      const rowFor = (content: string) => llmSteps.find((s) => s.content === content)
+
+      expect(rowFor('chunk-1')?.thinking).toBe('thinking A')
+      expect(rowFor('chunk-1')?.usage).toEqual({ input_tokens: 1, output_tokens: 2 })
+      expect(rowFor('chunk-2')?.thinking).toBe('thinking B')
+      expect(rowFor('chunk-2')?.usage).toEqual({ input_tokens: 3, output_tokens: 4 })
+    })
+
     test('onCitationUpdate adds citation to store', async () => {
       await setupConnectedHook()
 
@@ -937,7 +1136,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('report.md', '# Report content')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'report.md', content: '# Report content' })
       })
 
       expect(mockAddDeepResearchFile).toHaveBeenCalledWith({
@@ -950,7 +1149,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('report.md', '# Final report')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'report.md', content: '# Final report' })
       })
 
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
@@ -960,7 +1159,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('artifacts/report.md', '# Final report')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'artifacts/report.md', content: '# Final report' })
       })
 
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
@@ -970,7 +1169,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('notes.md', '# Some notes')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'notes.md', content: '# Some notes' })
       })
 
       expect(mockAddDeepResearchFile).toHaveBeenCalledWith({

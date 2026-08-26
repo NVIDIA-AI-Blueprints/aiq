@@ -13,7 +13,7 @@ compatibility: |
   access to a running local AI-Q Blueprint server at `http://localhost:8000` by default. Non-local backends must be
   explicitly trusted by the user and granted by the host tool outside this public skill.
 metadata:
-  version: "2.1.0"
+  version: "2.2.0"
   author: "NVIDIA AI-Q Blueprint Team <aiq-blueprint@nvidia.com>"
   github-url: "https://github.com/NVIDIA-AI-Blueprints/aiq"
   tags:
@@ -32,7 +32,7 @@ allowed-tools: Read Bash
 
 # AIQ Research Skill
 
-## Purpose
+## When to Use This Skill
 
 Use this skill to call a locally running NVIDIA AI-Q Blueprint server through the helper script at
 `scripts/aiq.py`.
@@ -64,7 +64,7 @@ Users need:
 
 The helper script has no third-party Python package dependencies; it uses Python standard-library HTTP modules.
 
-## Instructions
+## Workflow
 
 1. Resolve the target backend URL.
 2. Run `health` before sending research requests.
@@ -165,7 +165,7 @@ When `research_poll` completes successfully, fetch and present the full report. 
 If the job status is `failed`, `failure`, or `cancelled`, show the error from the status response and ask whether the
 user wants to retry with a narrower query or different approach.
 
-### Step 6 - Follow up: ask about or redo a report
+### Step 6 - Follow up: ask about, edit, or redo a report
 
 After a report is presented, the user often wants to go deeper or adjust scope.
 Reuse the existing backend flow — the same auth boundary, polling, and report
@@ -186,6 +186,13 @@ retrieval from Steps 1-5 apply; there is no separate follow-up endpoint.
   If this returns a `deep_research_running` job ID, poll it with `research_poll`
   exactly as in Step 3.
 
+**Edit** — rewrite a report with cosmetic changes. This skill only has access
+to the data used to generate the initial report. No tools are available:
+
+```bash
+python3 $SKILL_DIR/scripts/aiq.py report_edit <JOB_ID> "<EDIT_INSTRUCTIONS>"
+```
+
 **Redo** — re-run research with adjusted scope (a narrower query, a corrected
 question, or a different depth):
 
@@ -204,7 +211,7 @@ citations and source URLs intact in every follow-up answer.
 
 ## Version Compatibility
 
-**IMPORTANT:** This skill is designed for NVIDIA AI-Q Blueprint version 2.1.0.
+**IMPORTANT:** This skill is designed for NVIDIA AI-Q Blueprint version 2.2.0.
 
 Semantic Versioning Compatibility Rules:
 
@@ -220,11 +227,11 @@ Compatible IF:
 
 Examples:
 
-- Skill version 2.1.0 is compatible with Blueprint version 2.1.0.
-- Skill version 2.1.0 is compatible with Blueprint version 2.2.0.
-- Skill version 2.1.0 is compatible with Blueprint version 2.1.5.
-- Skill version 2.1.0 is not compatible with Blueprint version 3.0.0.
-- Skill version 2.1.0 is not compatible with Blueprint version 2.0.0.
+- Skill version 2.2.0 is compatible with Blueprint version 2.2.0.
+- Skill version 2.2.0 is compatible with Blueprint version 2.3.0.
+- Skill version 2.2.0 is compatible with Blueprint version 2.2.5.
+- Skill version 2.2.0 is not compatible with Blueprint version 3.0.0.
+- Skill version 2.2.0 is not compatible with Blueprint version 2.1.0.
 
 If your Blueprint version is not compatible:
 
@@ -246,6 +253,7 @@ If your Blueprint version is not compatible:
 | `scripts/aiq.py status` | Fetch job status plus `/state` artifacts | `<job_id>` |
 | `scripts/aiq.py state` | Fetch event-store artifacts only | `<job_id>` |
 | `scripts/aiq.py report` | Fetch the final report; with `--out-dir DIR`, export a portable `report.md` + `artifacts/` folder with links rewritten to local files | `<job_id> [--out-dir DIR]` |
+| `scripts/aiq.py report_edit` | Edit a completed report with cosmetic changes | `<job_id> <edit_instructions>` |
 | `scripts/aiq.py artifacts` | List durable artifacts; with `--download-dir DIR`, download them and print local paths | `<job_id> [--download-dir DIR]` |
 | `scripts/aiq.py stream` | Stream SSE events from a job | `<job_id>` |
 | `scripts/aiq.py cancel` | Cancel a running job | `<job_id>` |
@@ -387,7 +395,7 @@ source URLs intact.
    python3 $SKILL_DIR/scripts/aiq.py agents
    ```
 2. If agents are unavailable, report the compatibility failure and offer to run `aiq-deploy` validation.
-3. Confirm the deployed Blueprint version is compatible with skill version 2.1.0.
+3. Confirm the deployed Blueprint version is compatible with skill version 2.2.0.
 
 ### Issue: Job is interrupted or appears stuck
 

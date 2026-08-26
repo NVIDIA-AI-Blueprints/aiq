@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 
 import aiosqlite
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -59,6 +58,7 @@ from .prompt_utils import load_prompt
 from .prompt_utils import render_prompt_template
 from .tool_validation import format_tool_unavailability_error
 from .tool_validation import format_user_facing_tool_error
+from .tool_validation import validate_research_source_configuration
 from .tool_validation import validate_tool_availability
 
 logger = logging.getLogger(__name__)
@@ -94,25 +94,10 @@ __all__ = [
     "reset_session_registry",
     "sanitize_report",
     "set_session_registry",
+    "validate_research_source_configuration",
     "validate_tool_availability",
     "verify_citations",
 ]
-
-
-# @environment_variable AIQ_VERBOSE
-# @category Debug
-# @type bool
-# @default false
-# @required false
-# Enable verbose logging output. Accepts true/1/yes or false/0/no.
-def is_verbose(config_verbose: bool) -> bool:
-    """Check if verbose mode is enabled via env var or config."""
-    env_verbose = os.getenv("AIQ_VERBOSE", "").lower()
-    if env_verbose in ("true", "1", "yes"):
-        return True
-    if env_verbose in ("false", "0", "no"):
-        return False
-    return config_verbose
 
 
 def _create_chat_response(

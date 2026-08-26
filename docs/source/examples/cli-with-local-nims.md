@@ -11,39 +11,29 @@ This example is based on `configs/config_cli_default.yml` with modifications to 
 
 ## Prerequisites
 
-You need Docker and NVIDIA GPUs with sufficient VRAM to run the NIM containers. Check the Nemotron Super model card and support matrix for current self-hosted hardware requirements.
+You need Docker and NVIDIA GPUs with sufficient VRAM to run the NIM containers. Check the downloadable Nemotron 3 Ultra model card and support matrix for current self-hosted hardware requirements.
 
 ## Running NIM Containers
 
-Start the NIM model server locally using Docker:
+Authenticate to NGC, then start the NIM model server locally using Docker:
 
 ```bash
+echo "${NGC_API_KEY}" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+
 # Pull and run the Nemotron NIM container
 # Adjust --gpus and CUDA_VISIBLE_DEVICES for your hardware
 docker run -d \
   --name nemotron-nim \
   --gpus all \
   -p 8001:8000 \
-  -e NVIDIA_API_KEY="${NVIDIA_API_KEY}" \
-  nvcr.io/nim/nvidia/nemotron-3-super-120b-a12b:latest
+  -e NGC_API_KEY="${NGC_API_KEY}" \
+  nvcr.io/nim/nvidia/nemotron-3-ultra-550b-a55b:latest
 ```
 
 Verify the model is ready:
 
 ```bash
 curl http://localhost:8001/v1/models
-```
-
-For multi-model setups (for example, separate intent and research models), run additional containers on different ports:
-
-```bash
-# Smaller model for intent classification
-docker run -d \
-  --name nemotron-mini-nim \
-  --gpus '"device=1"' \
-  -p 8002:8000 \
-  -e NVIDIA_API_KEY="${NVIDIA_API_KEY}" \
-  nvcr.io/nim/nvidia/nemotron-mini-4b-instruct:latest
 ```
 
 ## Configuration
@@ -58,12 +48,6 @@ general:
       console:
         _type: console
         level: INFO
-    # Optional: trace to local Phoenix for debugging
-    # tracing:
-    #   phoenix:
-    #     _type: phoenix
-    #     endpoint: http://localhost:6006/v1/traces
-    #     project: local-dev
 
 # ===========================================================================
 # LLMs - pointing to local NIM containers
@@ -72,27 +56,28 @@ general:
 # instead of integrate.api.nvidia.com. No NVIDIA_API_KEY is needed for
 # inference (only for pulling the container image).
 llms:
-  nemotron_llm_intent:
+  local_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    # Use the identifier returned by this local NIM's /v1/models endpoint.
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "http://localhost:8001/v1"   # <-- Local NIM
-    temperature: 0.5
-    top_p: 0.9
-    max_tokens: 4096
-    num_retries: 3
-    chat_template_kwargs:
-      enable_thinking: true
-
-  nemotron_super_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "http://localhost:8001/v1"   # <-- Local NIM
-    temperature: 0.1
-    top_p: 0.3
+    temperature: 0.2
+    top_p: 0.7
     max_tokens: 16384
     num_retries: 3
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
+
+  local_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "http://localhost:8001/v1"   # <-- Local NIM
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
+    num_retries: 3
+    chat_template_kwargs:
+      enable_thinking: false
 
 # ===========================================================================
 # Functions
@@ -115,25 +100,22 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: local_ultra_llm
     tools:
       - web_search_tool
       - paper_search_tool
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
+    llm: local_ultra_llm
     tools:
       - web_search_tool
     max_turns: 3
-    enable_plan_approval: true    # Interactive plan approval in CLI
     log_response_max_chars: 2000
-    verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: local_ultra_llm
     tools:
       - web_search_tool
     max_llm_turns: 10
@@ -141,7 +123,11 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
+    orchestrator_llm: local_ultra_llm
+    source_router_llm: local_ultra_llm
+    planner_llm: local_ultra_llm
+    researcher_llm: local_ultra_llm
+    writer_llm: local_ultra_writer_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
@@ -159,8 +145,8 @@ workflow:
 ## Required Environment Variables
 
 ```bash
-# Only needed for pulling NIM container images (not for inference)
-export NVIDIA_API_KEY="nvapi-..."  # pragma: allowlist secret
+# Required to authenticate to NGC, pull the image, and download model artifacts
+export NGC_API_KEY="nvapi-..."  # pragma: allowlist secret
 
 # Web search still requires API keys (runs externally)
 export TAVILY_API_KEY="tvly-..."   # pragma: allowlist secret
@@ -182,9 +168,10 @@ dotenv -f deploy/.env run .venv/bin/nat run \
 The CLI script starts an interactive session. Type your research query and the system will:
 
 1. Classify the intent (shallow vs deep)
-2. For deep queries: present a research plan for your approval
-3. Execute the research with tool calls shown in real time
-4. Output a structured report
+2. Ask a focused clarification only when the request is genuinely ambiguous; the clarifier does not ask you to approve a plan
+3. For deep queries, build an internal structured plan and run independent research queries concurrently
+4. Show research tool activity in real time
+5. Have the writer synthesize the captured evidence into the requested output shape
 
 ### Example Session
 
@@ -203,7 +190,8 @@ The CLI script starts an interactive session. Type your research query and the s
 
 ## Tips for Local NIMs
 
-- **GPU memory**: Monitor with `nvidia-smi`. The 30B model needs ~40 GB VRAM.
+- **GPU memory**: Monitor with `nvidia-smi`. Size GPUs for the
+  `nvidia/nemotron-3-ultra-550b-a55b` NIM using the model card and support matrix.
 - **Startup time**: NIM containers take 2--5 minutes to load the model on first start. Wait until `/v1/models` returns a response.
 - **Multiple GPUs**: Use `--gpus '"device=0,1"'` to spread across GPUs, or run separate containers per GPU for different model roles.
 - **Networking**: If running inside Docker Compose, use container names instead of `localhost` for `base_url`.

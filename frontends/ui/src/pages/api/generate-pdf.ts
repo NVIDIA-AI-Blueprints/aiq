@@ -5,7 +5,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import React from 'react'
 import { renderToStream } from '@react-pdf/renderer'
 import { MarkdownPDF } from '../../lib/pdf/ReactPdfDocument'
-import { extractArtifactIds, replaceArtifactImages } from '../../shared/components/MarkdownRenderer/artifact-url'
+import { extractArtifactIds, replaceArtifactImages } from '@/shared/utils/artifact-url'
 import { isAuthRequired } from '@/adapters/auth/config'
 
 // Cap the bytes we embed per image. Charts are tiny; this guards against base64-inflating a

@@ -2,7 +2,7 @@
 
 Deploy AI-Q from the cloned repository using the local Helm chart.
 
-> **Looking to install from the NGC Helm repository?** See the [Helm README](../README.md#install-from-ngc-helm-repository) instead.
+> **Looking to install from the NGC Helm repository?** Refer to the [Helm README](../README.md#install-from-ngc-helm-repository) instead.
 
 ## Prerequisites
 
@@ -14,6 +14,12 @@ Deploy AI-Q from the cloned repository using the local Helm chart.
 ## Deploy
 
 Create the namespace and required user-supplied credentials first:
+
+The source chart derives every namespaced resource from Helm's
+`.Release.Namespace`, supplied with `-n`. This guide uses `ns-aiq`; if you choose a
+different namespace, use it consistently for the Helm release, Secrets, `kubectl`
+commands, and external identity bindings. Setting `aiq.namespace.create=true` controls
+whether the chart renders a Namespace object; it does not override the release namespace.
 
 ```bash
 kubectl create namespace ns-aiq --dry-run=client -o yaml | kubectl apply -f -
@@ -49,6 +55,49 @@ helm install aiq deployment-k8s/ -n ns-aiq --create-namespace \
   --set aiq.apps.frontend.image.repository=nvcr.io/nvidia/blueprint/aiq-frontend
 ```
 
+### Shared Dask scheduler and workers
+
+For multiple backend replicas, use one scheduler service and a dedicated worker
+deployment instead of starting a scheduler and worker inside every backend pod.
+Create client, scheduler, and worker TLS Secrets before applying the example.
+All certificates must be signed by the same CA, and the scheduler certificate
+must be valid for the `aiq-dask-scheduler` Service name:
+
+```bash
+kubectl create secret generic aiq-dask-client-tls -n ns-aiq \
+  --from-file=ca.crt=./tls/ca.crt \
+  --from-file=tls.crt=./tls/client.crt \
+  --from-file=tls.key=./tls/client.key
+kubectl create secret generic aiq-dask-scheduler-tls -n ns-aiq \
+  --from-file=ca.crt=./tls/ca.crt \
+  --from-file=tls.crt=./tls/scheduler.crt \
+  --from-file=tls.key=./tls/scheduler.key
+kubectl create secret generic aiq-dask-worker-tls -n ns-aiq \
+  --from-file=ca.crt=./tls/ca.crt \
+  --from-file=tls.crt=./tls/worker.crt \
+  --from-file=tls.key=./tls/worker.key
+
+helm upgrade --install aiq deployment-k8s/ -n ns-aiq \
+  -f ../examples/shared-dask-values.yaml
+```
+
+The example sets `NAT_DASK_SCHEDULER_ADDRESS=tls://aiq-dask-scheduler:8786`
+on the API pods, creates `aiq-dask-scheduler`, and starts four
+`aiq-dask-worker` pods. All API replicas can therefore submit work to the same
+worker pool. Change `aiq.apps.dask-worker.replicas` and its resource requests to
+match the expected research concurrency.
+
+Workers use the backend workflow configuration and application credentials
+because they execute research functions. The scheduler mounts only its TLS
+identity; `mountSharedSecrets: false` keeps application credentials off that
+workload. The worker Service is disabled because only the scheduler needs a
+stable network endpoint.
+
+The scheduler accepts executable task payloads. The example therefore requires
+mutual TLS and creates an ingress NetworkPolicy that permits scheduler traffic
+on port 8786 only from the backend and worker pods. Do not expose the scheduler
+or dashboard through an Ingress or public load balancer.
+
 ### Verify
 
 ```bash
@@ -68,8 +117,13 @@ aiq-postgres-xxx                1/1     Running   0          30s
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
+
+The backend liveness probe uses `/live`, which checks only that the API process
+responds. The readiness probe uses `/health`, so database or content-encryption
+outages remove the pod from service without triggering a restart loop.
 
 ## Configuration, FRAG, Secrets, and Access
 
@@ -97,7 +151,7 @@ kubectl delete namespace ns-aiq
 
 ## Troubleshooting
 
-See the [Helm README — Troubleshooting](../README.md#troubleshooting) for common issues (pod status, logs, image pull errors, FRAG connection issues).
+Refer to the [Helm README — Troubleshooting](../README.md#troubleshooting) for common issues (pod status, logs, image pull errors, FRAG connection issues).
 
 ---
 

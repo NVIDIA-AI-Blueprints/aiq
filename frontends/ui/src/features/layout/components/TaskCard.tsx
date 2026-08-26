@@ -6,8 +6,8 @@
  *
  * Row-like card displaying a single task/todo item with:
  * - KUI Checkbox (checked when complete, not clickable)
- * - Task name in label/semibold/md text
- * - Status badge with color based on status
+ * - Task name
+ * - A shared StatusDot atom + a plain status word (In progress / Done / ...)
  *
  * SSE Events: artifact.update with type: "todo"
  */
@@ -15,8 +15,8 @@
 'use client'
 
 import { type FC } from 'react'
-import { Flex, Text, Checkbox, Badge } from '@/adapters/ui'
-import { LoadingSpinner } from '@/adapters/ui/icons'
+import { Flex, Text, Checkbox } from '@/adapters/ui'
+import { StatusDot, todoStatusToNodeState } from '@/shared/components/research'
 import type { DeepResearchTodo, DeepResearchTodoStatus } from '@/features/chat/types'
 
 interface TaskCardProps {
@@ -24,52 +24,26 @@ interface TaskCardProps {
   todo: DeepResearchTodo
 }
 
-/**
- * Get badge color based on task status
- * - green: completed
- * - teal: in_progress
- * - yellow: pending
- * - red: stopped (error state)
- */
-const getBadgeColor = (status: DeepResearchTodoStatus): 'green' | 'teal' | 'yellow' | 'red' => {
-  switch (status) {
-    case 'completed':
-      return 'green'
-    case 'in_progress':
-      return 'teal'
-    case 'pending':
-      return 'yellow'
-    case 'stopped':
-      return 'red'
-    default:
-      return 'yellow'
-  }
-}
-
-/**
- * Get display text for status badge
- */
+/** Plain status word shown next to the status atom. */
 const getStatusText = (status: DeepResearchTodoStatus): string => {
   switch (status) {
     case 'completed':
-      return 'complete'
+      return 'Done'
     case 'in_progress':
-      return 'in progress'
-    case 'pending':
-      return 'pending'
+      return 'In progress'
     case 'stopped':
-      return 'stopped'
+      return 'Stopped'
+    case 'pending':
     default:
-      return status
+      return 'Pending'
   }
 }
 
 /**
- * Card showing a single task's checkbox, name, and status badge.
+ * Card showing a single task's checkbox, name, and a status atom + plain word.
  */
 export const TaskCard: FC<TaskCardProps> = ({ todo }) => {
   const isComplete = todo.status === 'completed'
-  const badgeColor = getBadgeColor(todo.status)
   const statusText = getStatusText(todo.status)
 
   return (
@@ -81,30 +55,24 @@ export const TaskCard: FC<TaskCardProps> = ({ todo }) => {
         ${isComplete ? 'opacity-70' : ''}
       `}
     >
-      {/* Checkbox - checked when complete, always disabled (read-only) */}
-      <Checkbox
-        checked={isComplete}
-        disabled
-        aria-label={`Task: ${todo.content}`}
-      />
+      {}
+      <Checkbox checked={isComplete} disabled aria-label={`Task: ${todo.content}`} />
 
-      {/* Task Name */}
+      {}
       <Text
         kind="label/semibold/md"
-        className={`flex-1 min-w-0 ${isComplete ? 'line-through text-subtle' : 'text-primary'}`}
+        className={`flex-1 min-w-0 ${isComplete ? 'line-through text-secondary' : 'text-primary'}`}
       >
         {todo.content}
       </Text>
 
-      {/* Status Badge - with spinner for in_progress */}
-      <Badge color={badgeColor}>
-        <Flex align="center" gap="1">
-          {todo.status === 'in_progress' && (
-            <LoadingSpinner size="small" className="h-3 w-3" aria-label="In progress" />
-          )}
+      {}
+      <Flex align="center" gap="2" className="shrink-0">
+        <StatusDot state={todoStatusToNodeState(todo.status)} />
+        <Text kind="body/regular/sm" className="text-secondary">
           {statusText}
-        </Flex>
-      </Badge>
+        </Text>
+      </Flex>
     </Flex>
   )
 }

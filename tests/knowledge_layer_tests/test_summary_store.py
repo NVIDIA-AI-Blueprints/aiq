@@ -22,18 +22,46 @@ Tests cover:
 - URL normalization for database connections
 """
 
+import logging
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
 
+from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_agent.knowledge.schema import AvailableDocument
 from aiq_agent.knowledge.summary_store import SummaryStore
 from aiq_agent.knowledge.summary_store import _normalize_db_url
+from aiq_agent.knowledge.summary_store import _redact_db_url
 
 # =============================================================================
 # URL Normalization Tests
 # =============================================================================
+
+
+def test_redact_db_url():
+    """Test database passwords are redacted while other URL details remain."""
+    assert (
+        _redact_db_url(
+            "postgresql://alice:plain_password@db.internal:5432/aiq"  # pragma: allowlist secret
+        )
+        == "postgresql://alice:***@db.internal:5432/aiq"
+    )
+    assert (
+        _redact_db_url(
+            "postgresql+psycopg://alice:p%40ss%3Aword@db.internal:5432/aiq"  # pragma: allowlist secret
+        )
+        == "postgresql+psycopg://alice:***@db.internal:5432/aiq"
+    )
+    assert (
+        _redact_db_url(
+            "postgresql://alice:plain_password@db.internal:5432/aiq"  # pragma: allowlist secret
+            "?password=query_password&sslpassword=tls_password&token=query_token"
+        )
+        == "postgresql://alice:***@db.internal:5432/aiq"
+    )
+    assert _redact_db_url("sqlite+aiosqlite:///./summaries.db") == "sqlite+aiosqlite:///./summaries.db"
 
 
 class TestNormalizeDbUrl:
@@ -182,10 +210,34 @@ class TestSummaryStore:
         assert len(docs) == 1
         assert docs[0].summary == "Updated summary"
 
+    def test_register_preserves_existing_when_upsert_disabled(self, store):
+        """Test insert-only registration preserves an existing filename's summary."""
+        store.register("collection", "doc.pdf", "Original summary")
+        store.register("collection", "doc.pdf", "Ignored summary", upsert=False)
+
+        docs = store.get_all("collection")
+        assert len(docs) == 1
+        assert docs[0].summary == "Original summary"
+
     def test_get_all_empty_collection(self, store):
         """Test getting documents from empty collection returns empty list."""
         docs = store.get_all("nonexistent_collection")
         assert docs == []
+
+    def test_database_errors_do_not_log_collection_capability(self, temp_db, caplog):
+        """Bound SQL parameters stay hidden when an operation fails."""
+        store = SummaryStore(temp_db)
+        capability_id = str(uuid.uuid4())
+        assert store._sync_engine.hide_parameters is True
+        assert store._get_or_create_async_engine(temp_db).sync_engine.hide_parameters is True
+        with store._sync_engine.begin() as conn:
+            conn.exec_driver_sql("DROP TABLE summaries")
+
+        caplog.set_level(logging.WARNING, logger="aiq_agent.knowledge.summary_store")
+
+        assert store.get_all(capability_id) == []
+        assert capability_id not in caplog.text
+        assert log_identifier_ref(capability_id) in caplog.text
 
     def test_get_all_different_collections(self, store):
         """Test documents are isolated by collection."""

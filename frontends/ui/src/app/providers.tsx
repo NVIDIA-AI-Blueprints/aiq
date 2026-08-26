@@ -17,6 +17,7 @@ import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { SessionProvider } from 'next-auth/react'
 import { ThemeProvider } from '@/adapters/ui'
 import { AppConfigProvider, type AppConfig } from '@/shared/context'
+import { AppMotionConfig } from '@/shared/lib/motion'
 import { useLayoutStore } from '@/features/layout'
 import { useChatStore } from '@/features/chat/store'
 import type { ThemeMode } from '@/features/layout'
@@ -134,7 +135,7 @@ const ThemeWrapper = ({ children }: { children: ReactNode }): ReactNode => {
 
   return (
     <ThemeProvider theme={theme} global defer>
-      {children}
+      <AppMotionConfig>{children}</AppMotionConfig>
     </ThemeProvider>
   )
 }

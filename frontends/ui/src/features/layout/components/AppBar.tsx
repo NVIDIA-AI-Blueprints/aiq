@@ -15,10 +15,11 @@
 
 'use client'
 
-import { type FC, memo, useCallback, useState } from 'react'
+import { type FC, memo, useCallback, useEffect, useState } from 'react'
 import { Flex, Text, Button, Logo, Avatar, Popover, Divider } from '@/adapters/ui'
-import { Globe, Book, Lock, Logout, OpenExternal, Info, Moon, Sun, ChatMessage } from '@/adapters/ui/icons'
+import { Globe, Book, Lock, Logout, OpenExternal, Info, Moon, Sun } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
+import { cn } from '@/shared/lib/cn'
 import type { ThemeMode } from '../types'
 
 interface AppBarProps {
@@ -58,13 +59,26 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
   onSignIn,
   onSignOut,
 }) {
-  const toggleSessionsPanel = useLayoutStore((s) => s.toggleSessionsPanel)
+  const rightPanel = useLayoutStore((s) => s.rightPanel)
+  const isDataSourcesOpen = rightPanel === 'data-sources'
+  const theme = useLayoutStore((s) => s.theme)
+  const setTheme = useLayoutStore((s) => s.setTheme)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
+  const [systemPrefersDark, setSystemPrefersDark] = useState(false)
 
-  const handleMenuClick = useCallback(() => {
-    if (!isAuthenticated) return
-    toggleSessionsPanel()
-  }, [toggleSessionsPanel, isAuthenticated])
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mq = window.matchMedia('(prefers-color-scheme: dark)')
+    setSystemPrefersDark(mq.matches)
+    const handler = (e: MediaQueryListEvent): void => setSystemPrefersDark(e.matches)
+    mq.addEventListener?.('change', handler)
+    return () => mq.removeEventListener?.('change', handler)
+  }, [])
+
+  const isDarkMode = theme === 'dark' || (theme === 'system' && systemPrefersDark)
+  const toggleTheme = useCallback(() => {
+    setTheme(isDarkMode ? 'light' : 'dark')
+  }, [isDarkMode, setTheme])
 
   const handleAddSourcesClick = useCallback(() => {
     if (!isAuthenticated) return
@@ -89,7 +103,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
   return (
     <header className="border-b border-base">
       <Flex align="center" justify="between" className="h-[var(--header-height)] gap-4 px-4">
-        {/* Left section: New session button + Sessions toggle */}
+        {/* Left section: New session button + session title */}
         <Flex align="center" gap="2" className="min-w-0 flex-1">
           <Button
             kind="tertiary"
@@ -109,22 +123,6 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
               <Text kind="label/semibold/lg" className="text-primary whitespace-nowrap">
                 AI-Q
               </Text>
-            </Flex>
-          </Button>
-          <Flex justify="start">
-          <Divider orientation="vertical" />
-          </Flex>
-          <Button
-            kind="tertiary"
-            size="small"
-            onClick={handleMenuClick}
-            disabled={!isAuthenticated}
-            aria-label="Toggle sessions sidebar"
-            title="Toggle sessions sidebar"
-          >
-            <Flex align="center" gap="1">
-              <ChatMessage className="h-4 w-4" />
-              <Text kind="label/bold/sm">Sessions</Text>
             </Flex>
           </Button>
           {sessionTitle && (
@@ -152,12 +150,25 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
             onClick={handleAddSourcesClick}
             disabled={!isAuthenticated}
             aria-label="Add data sources"
+            aria-pressed={isDataSourcesOpen}
             title="Add data sources"
+            className={cn(isDataSourcesOpen && 'brand-tint')}
           >
             <Flex align="center" gap="1">
               <Globe className="h-4 w-4" />
               <Text kind="label/regular/md">Data Sources</Text>
             </Flex>
+          </Button>
+
+          {/* Theme toggle: quick dark/light switch */}
+          <Button
+            kind="tertiary"
+            size="small"
+            onClick={toggleTheme}
+            aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+            title={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {isDarkMode ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
           </Button>
 
           {/* User section: Auth not required notice, Avatar with dropdown, or Sign In button */}

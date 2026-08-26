@@ -1,0 +1,45 @@
+{
+  "_description": "Recorded NimbleSearchRetriever.ainvoke() response, search_depth=lite",
+  "_captured": "2026-07-10",
+  "_query": "NVIDIA CUDA Toolkit documentation",
+  "_config": {
+    "max_results": 5,
+    "search_depth": "lite",
+    "focus": "general",
+    "country": "US",
+    "locale": "en"
+  },
+  "_redaction": "only url/title/description/position/entity_type/page_content kept; page_content truncated to 2000 chars; no headers/auth",
+  "documents": [
+    {
+      "page_content": "",
+      "metadata": {
+        "url": "https://docs.nvidia.com/cuda/",
+        "title": "CUDA Toolkit Documentation",
+        "description": "Find installation instructions, launch highlights, programming guides, compiler documentation, API references, CUDA libraries, profiling tools, samples, and ...",
+        "position": 1,
+        "entity_type": "OrganicResult"
+      }
+    },
+    {
+      "page_content": "",
+      "metadata": {
+        "url": "https://developer.nvidia.com/cuda-toolkit-archive",
+        "title": "CUDA Toolkit Archive",
+        "description": "Previous releases of the CUDA Toolkit, GPU Computing SDK, documentation and developer drivers can be found using the links below. Please select the release...",
+        "position": 2,
+        "entity_type": "OrganicResult"
+      }
+    },
+    {
+      "page_content": "",
+      "metadata": {
+        "url": "https://cseweb.ucsd.edu/classes/wi15/cse262-a/static/cuda-5.5-doc/html/index.html",
+        "title": "CUDA Toolkit Documentation",
+        "description": "This guide presents established parallelization and optimization techniques and explains coding metaphors and idioms that can greatly simplify programming for...",
+        "position": 3,
+        "entity_type": "OrganicResult"
+      }
+    }
+  ]
+}

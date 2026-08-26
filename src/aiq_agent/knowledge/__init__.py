@@ -46,6 +46,7 @@ from .factory import get_available_documents
 from .factory import get_available_documents_async
 from .factory import get_ingestor
 from .factory import get_retriever
+from .factory import list_summary_collections
 from .factory import register_ingestor
 from .factory import register_retriever
 from .factory import register_summary
@@ -86,6 +87,7 @@ __all__ = [
     "unregister_summary",
     "get_available_documents",
     "get_available_documents_async",
+    "list_summary_collections",
     "clear_collection_summaries",
     "clear_all_summaries",
 ]

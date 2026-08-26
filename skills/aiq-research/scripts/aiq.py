@@ -81,11 +81,29 @@ ERROR_INCREMENT = 1
 FIRST_RETRY_ATTEMPT = 1
 CAPTURE_GROUP_JOB_ID = 1
 
-_DONE_JOB_STATES = frozenset({"completed", "success", "failed", "cancelled", "failure"})
+_DONE_JOB_STATES = frozenset({"completed", "success", "failed", "cancelled", "failure", "interrupted"})
 _SUCCESS_JOB_STATES = frozenset({"completed", "success"})
-_FAILED_JOB_STATES = frozenset({"failed", "failure", "cancelled"})
+_FAILED_JOB_STATES = frozenset({"failed", "failure", "cancelled", "interrupted"})
 _STREAM_TERMINAL_EVENTS = frozenset({"complete", "error", "done"})
 _CHAT_JOB_ID_RE = re.compile(rf"Job ID:\s*([0-9a-f-]{{{JOB_ID_HEX_DASH_LENGTH}}})", re.IGNORECASE)
+
+_ESCALATION_TYPE = "job_escalation"
+_ESCALATION_KIND_DEEP_RESEARCH = "deep_research"
+_STATUS_DEEP_RESEARCH_RUNNING = "deep_research_running"
+
+
+class McpAuthRequiredError(RuntimeError):
+    """The API returned 409 ``mcp_auth_required``.
+
+    One or more selected protected data sources must be connected (per-user MCP
+    OAuth) before the job can run. Carries the structured ``sources`` list so the
+    caller can surface each source's status and connect/auth URL.
+    """
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.sources: list[dict[str, Any]] = payload.get("sources") or []
+        super().__init__(payload.get("message") or "Data source connection required")
 
 
 def _validate_base_url(url: str) -> str:
@@ -137,6 +155,13 @@ def _validate_agent_type(agent_type: str) -> str:
     return value
 
 
+def _validate_source_id(source_id: str) -> str:
+    value = source_id.strip()
+    if not _AGENT_TYPE_RE.fullmatch(value):  # same charset: [A-Za-z0-9_.-]
+        raise RuntimeError("Invalid source_id")
+    return value
+
+
 def _api_request(
     method: str,
     path: str,
@@ -162,6 +187,15 @@ def _api_request(
             payload = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
+        # A 409 mcp_auth_required carries a structured body listing the protected
+        # sources to connect; surface it rather than collapsing to "HTTP 409".
+        if exc.code == 409:
+            try:
+                parsed = json.loads(error_body)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("error") == "mcp_auth_required":
+                raise McpAuthRequiredError(parsed) from exc
         print(f"HTTP {exc.code}: {error_body[:ERROR_BODY_PREVIEW_CHARS]}", file=sys.stderr)
         raise RuntimeError(f"HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
@@ -274,6 +308,45 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/cancel")
 
 
+def edit_report(job_id: str, edit_instruction: str) -> dict[str, Any]:
+    """Edit the final report for a completed async AI-Q job."""
+    body = {"input": edit_instruction}
+    return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/report/edit", body=body)
+
+
+def list_data_sources() -> Any:
+    """GET /v1/data_sources — available sources + this user's per-source auth state."""
+    return _api_request("GET", "/v1/data_sources")
+
+
+def source_auth_status(source_id: str) -> dict[str, Any]:
+    """GET /v1/auth/mcp/{id}/status — per-user MCP auth status for one source."""
+    return _api_request("GET", f"/v1/auth/mcp/{_validate_source_id(source_id)}/status")
+
+
+def connect_source(source_id: str) -> dict[str, Any]:
+    """POST /v1/auth/mcp/{id}/connect — start the OAuth flow; returns an auth_url."""
+    return _api_request("POST", f"/v1/auth/mcp/{_validate_source_id(source_id)}/connect")
+
+
+def _print_mcp_auth_required(err: McpAuthRequiredError) -> None:
+    """Render a 409 mcp_auth_required as actionable connect guidance on stderr."""
+    base = _validate_base_url(AIQ_SERVER_URL)
+    print(f"\n{err}\n", file=sys.stderr)
+    for src in err.sources:
+        sid = src.get("source_id", "?")
+        status = src.get("status", "?")
+        print(f"  - {sid} ({status})", file=sys.stderr)
+        auth_url = src.get("auth_url")
+        connect_url = src.get("connect_url")
+        if auth_url:
+            print(f"      Sign in: open this URL in a browser -> {auth_url}", file=sys.stderr)
+        elif connect_url:
+            print(f"      Start the connect flow: aiq.py connect {sid}", file=sys.stderr)
+            print(f"      (POST {base}{connect_url} returns the sign-in URL)", file=sys.stderr)
+    print("\nConnect the source(s) above, then re-run the command.", file=sys.stderr)
+
+
 def stream_job(job_id: str) -> None:
     """Print server-sent event payloads for an async AI-Q job."""
     for line in _stream_request(f"/v1/jobs/async/job/{_validate_job_id(job_id)}/stream"):
@@ -362,6 +435,9 @@ def _print_usage() -> None:
     print("  research <query> [agent_type] Submit async job, poll, and return report")
     print("  research_poll <job_id>        Resume polling an existing async job")
     print("  cancel <job_id>               Cancel a running async job")
+    print("  data_sources                  List data sources + per-user auth state")
+    print("  source_status <source_id>     Per-user MCP auth status for one source")
+    print("  connect <source_id>           Start MCP OAuth; prints the sign-in URL")
     print()
     print(f"Environment: AIQ_SERVER_URL defaults to {DEFAULT_SERVER_URL}")
 
@@ -378,14 +454,57 @@ def _command_health(_args: list[str]) -> None:
     print(json.dumps(health(), indent=JSON_INDENT_SPACES))
 
 
+def _escalation_job_id(payload: Any) -> str | None:
+    """Return a validated deep-research job_id from a job_escalation object, else None."""
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") != _ESCALATION_TYPE or payload.get("kind") != _ESCALATION_KIND_DEEP_RESEARCH:
+        return None
+    job_id = payload.get("job_id")
+    if not isinstance(job_id, str):
+        return None
+    try:
+        return _validate_job_id(job_id)
+    except RuntimeError:
+        return None
+
+
+def _detect_deep_research_escalation(result: dict[str, Any], content: str) -> str | None:
+    """Detect a 26.07 JSON job_escalation contract for deep research.
+
+    Recognizes the escalation object either as the top-level /chat result or as a
+    JSON string embedded in the OpenAI-style message content. Returns a validated
+    job_id, or None for malformed, non-escalation, or invalid payloads.
+    """
+    job_id = _escalation_job_id(result)
+    if job_id is not None:
+        return job_id
+    if content:
+        try:
+            embedded = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return _escalation_job_id(embedded)
+    return None
+
+
 def _command_chat(args: list[str]) -> None:
     query = _require_arg(args, "Usage: aiq.py chat <query>")
     result = chat_request(query)
     content = _extract_chat_content(result)
+    job_id = _detect_deep_research_escalation(result, content)
+    if job_id is not None:
+        print(json.dumps({"status": _STATUS_DEEP_RESEARCH_RUNNING, "job_id": job_id}))
+        return
     match = _CHAT_JOB_ID_RE.search(content)
     if match:
-        print(json.dumps({"status": "deep_research_running", "job_id": match.group(CAPTURE_GROUP_JOB_ID)}))
-        return
+        try:
+            legacy_job_id = _validate_job_id(match.group(CAPTURE_GROUP_JOB_ID))
+        except RuntimeError:
+            legacy_job_id = None
+        if legacy_job_id is not None:
+            print(json.dumps({"status": _STATUS_DEEP_RESEARCH_RUNNING, "job_id": legacy_job_id}))
+            return
     print(json.dumps(result, indent=JSON_INDENT_SPACES))
 
 
@@ -501,6 +620,18 @@ def _command_report(args: list[str]) -> None:
     print(json.dumps(get_report(job_id), indent=JSON_INDENT_SPACES))
 
 
+def _command_report_edit(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py report_edit <job_id> <new focus>")
+    edit_instruction = _require_arg(args, "Usage: aiq.py report_edit <job_id> <new focus>", position=1)
+    result = edit_report(job_id, edit_instruction)
+    child_job_id = result.get("job_id")
+    if not child_job_id:
+        print(f"ERROR: No child_job_id in response: {result}", file=sys.stderr)
+        sys.exit(EXIT_FAILURE)
+    print(f"job submitted: {child_job_id}", file=sys.stderr)
+    _poll_until_success_or_exit(child_job_id)
+
+
 DOWNLOAD_DIR_FLAG = "--download-dir"
 
 
@@ -586,6 +717,27 @@ def _command_cancel(args: list[str]) -> None:
     print(json.dumps(cancel_job(job_id), indent=JSON_INDENT_SPACES))
 
 
+def _command_data_sources(_args: list[str]) -> None:
+    print(json.dumps(list_data_sources(), indent=JSON_INDENT_SPACES))
+
+
+def _command_source_status(args: list[str]) -> None:
+    source_id = _require_arg(args, "Usage: aiq.py source_status <source_id>")
+    print(json.dumps(source_auth_status(source_id), indent=JSON_INDENT_SPACES))
+
+
+def _command_connect(args: list[str]) -> None:
+    source_id = _require_arg(args, "Usage: aiq.py connect <source_id>")
+    result = connect_source(source_id)
+    auth_url = result.get("auth_url")
+    if result.get("status") == "connected":
+        print(f"{source_id} is already connected.", file=sys.stderr)
+    elif auth_url:
+        print("Open this URL in a browser to sign in, then re-run your command:", file=sys.stderr)
+        print(auth_url)
+    print(json.dumps(result, indent=JSON_INDENT_SPACES), file=sys.stderr)
+
+
 def main() -> None:
     """Dispatch the command-line interface."""
     if len(sys.argv) < MIN_COMMAND_ARG_COUNT:
@@ -593,6 +745,10 @@ def main() -> None:
         sys.exit(EXIT_FAILURE)
 
     cmd = sys.argv[COMMAND_NAME_POSITION]
+    if cmd in {"-h", "--help"}:
+        _print_usage()
+        return
+
     commands = {
         "health": _command_health,
         "chat": _command_chat,
@@ -602,10 +758,14 @@ def main() -> None:
         "state": _command_state,
         "stream": _command_stream,
         "report": _command_report,
+        "report_edit": _command_report_edit,
         "artifacts": _command_artifacts,
         "research": _command_research,
         "research_poll": _command_research_poll,
         "cancel": _command_cancel,
+        "data_sources": _command_data_sources,
+        "source_status": _command_source_status,
+        "connect": _command_connect,
     }
     handler = commands.get(cmd)
     if handler is None:
@@ -620,4 +780,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except McpAuthRequiredError as err:
+        _print_mcp_auth_required(err)
+        sys.exit(2)

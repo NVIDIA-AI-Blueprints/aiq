@@ -40,34 +40,33 @@ describe('TaskCard', () => {
     test('checkbox exists', () => {
       render(<TaskCard todo={createTodo({ content: 'My task' })} />)
 
-      // Verify checkbox is rendered
       expect(screen.getByRole('checkbox')).toBeInTheDocument()
     })
   })
 
-  describe('status badges', () => {
-    test('shows "pending" badge for pending status', () => {
+  describe('status word', () => {
+    test('shows "Pending" for pending status', () => {
       render(<TaskCard todo={createTodo({ status: 'pending' })} />)
 
-      expect(screen.getByText('pending')).toBeInTheDocument()
+      expect(screen.getByText('Pending')).toBeInTheDocument()
     })
 
-    test('shows "in progress" badge for in_progress status', () => {
+    test('shows "In progress" for in_progress status', () => {
       render(<TaskCard todo={createTodo({ status: 'in_progress' })} />)
 
-      expect(screen.getByText('in progress')).toBeInTheDocument()
+      expect(screen.getByText('In progress')).toBeInTheDocument()
     })
 
-    test('shows "complete" badge for completed status', () => {
+    test('shows "Done" for completed status', () => {
       render(<TaskCard todo={createTodo({ status: 'completed' })} />)
 
-      expect(screen.getByText('complete')).toBeInTheDocument()
+      expect(screen.getByText('Done')).toBeInTheDocument()
     })
 
-    test('shows "stopped" badge for stopped status', () => {
+    test('shows "Stopped" for stopped status', () => {
       render(<TaskCard todo={createTodo({ status: 'stopped' })} />)
 
-      expect(screen.getByText('stopped')).toBeInTheDocument()
+      expect(screen.getByText('Stopped')).toBeInTheDocument()
     })
   })
 
@@ -101,9 +100,7 @@ describe('TaskCard', () => {
     test('completed tasks have reduced opacity', () => {
       render(<TaskCard todo={createTodo({ status: 'completed' })} />)
 
-      // Find the card element by test id and check for opacity class
       const flexElements = screen.getAllByTestId('nv-flex')
-      // The outer Flex should have opacity-70 class
       const hasOpacity = flexElements.some((el) => el.classList.contains('opacity-70'))
       expect(hasOpacity).toBe(true)
     })

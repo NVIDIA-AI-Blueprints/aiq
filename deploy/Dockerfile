@@ -44,8 +44,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
-    && uv python install 3.13 \
-    && UV_PYTHON_BIN="$(uv python find 3.13)" \
+    && uv python install 3.13.14 \
+    && UV_PYTHON_BIN="$(uv python find 3.13.14)" \
     && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python \
     && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python3
 
@@ -69,23 +69,34 @@ COPY configs/ ./configs/
 # to avoid leaking .env, Helm charts, compose files, or other dev artifacts.
 COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 
-# Install dependencies using uv sync
-RUN uv sync --frozen --no-dev --no-install-workspace
+# Install dependencies using uv sync. We do NOT pass --no-dev: the workspace
+# source packages (tavily-web-search, exa-web-search, ...) and their runtime
+# deps (e.g. langchain-tavily) are declared in the [dependency-groups] dev group,
+# so --no-dev would omit them and the editable source installs below would
+# import-fail at runtime. Syncing with the dev group installs those deps from the
+# frozen lock (still pinned, no re-resolve). TODO(deploy): move the source
+# packages to a dedicated non-dev group to keep test-only tooling out of the image.
+RUN uv sync --frozen --extra pii --extra s3
 
-# Install workspace packages (without CLI for base)
-RUN uv pip install --no-deps -e . \
+# Install workspace packages (without CLI for base). The root install does not
+# need workspace source overrides because dependencies were synced above; avoid
+# parsing opt-in workspace groups whose source trees are intentionally absent.
+RUN uv pip install --no-sources --no-deps -e . \
     && uv pip install --no-deps -e ./sources/google_scholar_paper_search \
     && uv pip install --no-deps -e ./sources/tavily_web_search \
     && uv pip install --no-deps -e ./sources/exa_web_search \
+    && uv pip install --no-deps -e ./sources/nimble_web_search \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \
     && uv pip install --no-deps -e ./frontends/aiq_api \
     && uv pip install "psycopg[binary]>=3.0.0"
 
-RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; print('✓ Base packages installed')"
+RUN /app/.venv/bin/python -c \
+    "import asyncio; import aiq_api; import knowledge_layer; import presidio_analyzer; import presidio_anonymizer; import spacy; from nemoguardrails.library.sensitive_data_detection.actions import mask_sensitive_data; from nemoguardrails.rails.llm.config import RailsConfig; config = RailsConfig.from_content(yaml_content='rails:\n  config:\n    sensitive_data_detection:\n      output:\n        entities:\n          - EMAIL_ADDRESS\n'); assert spacy.util.is_package('en_core_web_lg'); assert asyncio.run(mask_sensitive_data(source='output', text='Contact customer@example.com', config=config)) == 'Contact <EMAIL_ADDRESS>'; print('✓ Base packages and PII runtime installed')"
 
+# Keep immutable application assets root-owned; only runtime data is writable by the service user.
 RUN chmod +x /app/deploy/start_web.py \
     && mkdir -p /app/data \
-    && chown -R 1000:1000 /app
+    && chown 1000:1000 /app/data
 
 # =============================================================================
 # Stage 2: Development (includes CLI)
@@ -101,12 +112,13 @@ RUN /app/.venv/bin/python -c "import aiq_api; import aiq_research_cli; import ai
 # =============================================================================
 # Stage 3: Development runtime
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS dev
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.8 AS dev
 
 WORKDIR /app
 
 COPY --from=dev-builder /opt/uv-python /opt/uv-python
 COPY --from=dev-builder /app /app
+COPY LICENSE LICENSE-THIRD-PARTY /licenses/
 
 USER 1000:1000
 
@@ -121,13 +133,14 @@ ENTRYPOINT ["python", "/app/deploy/entrypoint.py"]
 # =============================================================================
 # Stage 4: Release (production - no CLI)
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS release
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.8 AS release
 
 WORKDIR /app
 
 # Copy from base builder (no CLI)
 COPY --from=builder /opt/uv-python /opt/uv-python
 COPY --from=builder /app /app
+COPY LICENSE LICENSE-THIRD-PARTY /licenses/
 
 USER 1000:1000
 

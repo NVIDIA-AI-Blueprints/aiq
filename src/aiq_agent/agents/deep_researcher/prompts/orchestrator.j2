@@ -71,17 +71,14 @@ Step 5. **Return Answer**: After writer-agent returns, return only its short com
 {% endif %}
 
 ## Progress Tracking
-Use write_todos only after a workflow-advancing tool has already run. Use status values: "pending", "in_progress",
-or "completed".
-When calling `write_todos`, pass a single argument named `todos`. Each todo item must use this exact shape:
-`{"content": "<task description>", "status": "pending"}`.
-`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`.
-Never use `task`, `title`, or `description` keys for todo items.
-Do not call `write_todos` as the only tool call in an assistant turn.
-If todo tracking causes uncertainty, skip it and continue the workflow.
-
-Before returning the final answer, mark todos as "completed" only if todo tracking has already been used. Do not add
-a todo-only final turn. Do not output tool calls as text.
+- The orchestrator owns the top-level todo list. Never ask subagents to call `write_todos`.
+- Initialize todos at the beginning of the workflow with all major phases.
+- Mark the first step as "in_progress" and all other steps as "pending" in the initial list.
+- Update them at each major phase transition.
+- When calling `write_todos`, pass a single argument named `todos`. Each todo item must use this exact shape:
+`{"content": "<task description>", "status": "pending"}`. `status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`.
+- Never use `task`, `title`, or `description` keys for todo items.
+- Mark all steps as "completed" before returning the final message
 
 {% if enable_source_router %}
 ## Source Routing Delegation Template
@@ -118,6 +115,7 @@ The planner will use search tools to discover internal vs external and what info
 - Keep a submitted-query ledger using each ResearchQuery's exact `query` string. Before any later call, remove queries already submitted and successfully returned. Never repeat a covered query for extra depth.
 - `run_research_batch` returns a JSON array of successful `ResearchNotes` and persists those same notes as JSON files under `/shared/`; each note includes its own `evidence_judgment`.
 - If `run_research_batch` returns a tool error, read the error, revise only the invalid, failed, or missing ResearchQuery objects, and call `run_research_batch` again for that missing research. Do not resubmit successful returned notes.
+- If the error says the source-tool circuit is open or a source/query budget is exhausted, do not retry research. Proceed immediately to writer-agent with the successful notes and verified sources already available, and require the writer to state material evidence gaps. If no evidence was recovered, still delegate once so the runtime can return the existing actionable insufficient-sources outcome with a writer-produced draft; never claim a fully researched result.
 - Do NOT pass query IDs — each ResearchQuery needs full context.
 - Before writing, use the ResearchNotes returned by `run_research_batch` and the research note files under `/shared/` as the research evidence.
 

@@ -115,17 +115,22 @@ You can run a small subset of queries first using the `filter.allowlist` to vali
 
 ## Cost Analysis
 
-Running the profiler tells you *what happened*. The tokenomics report tells you *what it cost* — broken down by model, phase (Orchestrator / Planner / Researcher), and external tool API.
+Running the profiler tells you *what happened*. The tokenomics report tells you *what it cost* — broken down by
+model and external tool API, with a best-effort phase view (Orchestrator / Planner / Researcher).
 
 ### Why a dedicated cost report?
 
 LLM token costs alone do not capture the full picture of a research agent run:
 
-- **Search APIs are a significant cost driver.** In a typical Deep Research Bench run with 5 queries, Tavily advanced search accounts for roughly 95 calls at $0.016/call — around $1.52, or ~30% of the total run cost.
-- **Phase attribution is invisible to standard tooling.** The Planner and Researcher subagents run as inline LangGraph graphs inside the orchestrator. Standard observability backends report all LLM calls under a single function name and cannot split cost by phase.
-- **Cached tokens are billed at a discount.** Without explicit tracking, you cannot measure cache hit rates or quantify the savings from prompt caching.
+- **Search APIs are a significant cost driver.** Measure provider call counts for each evaluation run and apply the prices in effect for that run; research fan-out can make tool usage a material share of total cost.
+- **Native phase attribution is incomplete.** NAT traces do not consistently expose a role on each LLM call, so
+  the current adapter cannot produce authoritative per-role accounting for every deep-research execution path.
+- **Cached tokens may be billed at a discount.** Without explicit tracking, you cannot measure cache hit rates or quantify provider-specific savings from prompt caching.
 
-The tokenomics report addresses all three. It reconstructs phase attribution from timing windows in the NAT trace, separately tracks per-tool API charges, and reports cache savings alongside raw token costs.
+The tokenomics report separately tracks per-tool API charges and reports cache savings alongside raw token costs.
+It also infers phase buckets from task timing windows; treat those buckets as directional because the adapter
+collapses non-planner task subagents into the researcher bucket and assigns calls outside task windows to the
+orchestrator bucket.
 
 ### Configuring Pricing
 
@@ -137,31 +142,34 @@ Declare prices under `tokenomics.pricing`:
 tokenomics:
   pricing:
     models:
-      "azure/openai/gpt-5.2":
-        input_per_1m_tokens: 2.50
-        output_per_1m_tokens: 10.00
-      "nvidia/nemotron-3-super-120b-a12b":
-        input_per_1m_tokens: 0.12
-        output_per_1m_tokens: 0.50
-        cached_input_per_1m_tokens: 0.10   # optional: omit to bill cached tokens at full input rate
+      "nvidia/nemotron-3-ultra-550b-a55b":
+        # NVIDIA-hosted access for this example; not self-hosting cost.
+        input_per_1m_tokens: 0.00
+        output_per_1m_tokens: 0.00
     tools:
-      # Key "web_search" matches "advanced_web_search_tool" via substring lookup
-      "web_search":
+      # Tavily pay-as-you-go: $0.008/credit; basic uses one credit and
+      # advanced uses two. Use your plan's effective credit rate instead.
+      "web_search_tool":
+        cost_per_call: 0.008
+      "advanced_web_search_tool":
         cost_per_call: 0.016
+      # Default Serper Starter tier: $50 / 50,000 successful queries.
+      # Change this when using another tier or paper-search provider.
       "paper_search":
-        cost_per_call: 0.0003
-    # Fallback for any model not listed above.
-    # Set to null to raise an error on unknown models instead.
-    default:
-      input_per_1m_tokens: 1.00
-      output_per_1m_tokens: 4.00
+        cost_per_call: 0.001
 ```
 
-You can optionally set `eval.general.output_dir` in that same file so the report’s default output path matches your eval artifacts directory (see `config_tokenomics_pricing.yml` in the bench configs).
+You can optionally set `eval.general.output_dir` in that same file so the report’s default output path matches your eval artifacts directory (refer to `config_tokenomics_pricing.yml` in the bench configs).
 
-**Model name lookup** uses exact match first, then substring match, then the `default`. A key of `"gpt-5.2"` matches a trace model name of `"azure/openai/gpt-5.2"` because the key is a substring of the full name.
+**Model name lookup** uses exact match first, then substring match, then the
+`default`. Prefer the exact provider model identifier emitted in the Relay
+trace so similarly named deployments do not share prices accidentally.
 
-**Tool name lookup** follows the same rule. A key of `"web_search"` matches `"advanced_web_search_tool"` because `"web_search"` is a substring of the tool name. Unknown tools default to $0 — no error is raised, so you only need to configure tools that have a real per-call cost.
+**Tool name lookup** follows the same rule, with exact matches taking priority.
+Keep wrapper and provider-facing tool names distinct so one external request is
+not charged twice. Unknown and internal tools default to $0. Provider-backed
+tools such as paper search must use the effective per-request price for the
+configured provider and subscription plan.
 
 **`cached_input_per_1m_tokens`** is optional. When omitted, cached tokens are billed at the full input rate (no discount). Set it when your model provider charges a reduced rate for KV-cache hits.
 
@@ -171,7 +179,7 @@ After `nat eval` completes, run:
 
 ```bash
 PYTHONPATH=src python -m aiq_agent.tokenomics.report \
-  --trace  frontends/benchmarks/deepresearch_bench/results/all_requests_profiler_traces.json \
+  --trace relay/aiq-relay.atof.jsonl \
   --config frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pricing.yml
 ```
 
@@ -187,7 +195,9 @@ The report is organized into six tabs. Each chart includes a subtitle explaining
 
 #### Overview
 
-Top-level stat cards: total cost (LLM + tools), LLM cost, tool API cost, cache savings, prompt/completion token totals, and LLM call count. Below the cards, a per-query summary table and cost breakdown by model and phase.
+Top-level stat cards: total cost (LLM + tools), LLM cost, tool API cost, cache savings, prompt/completion token totals,
+and LLM call count. Below the cards, a per-query summary table, cost breakdown by model, and best-effort phase
+buckets.
 
 Use this tab for a quick health check: if tool API cost is comparable to LLM cost, search frequency is a primary optimization target.
 
@@ -196,10 +206,10 @@ Use this tab for a quick health check: if tool API cost is comparable to LLM cos
 | Chart | What it shows |
 |-------|---------------|
 | Cost Split by Model | Donut chart of budget allocation across models. |
-| Cost by Phase | Horizontal bar: Orchestrator / Planner / Researcher. High Researcher share means many parallel search-heavy sub-tasks. |
+| Cost by Phase | Best-effort Orchestrator / Planner / Researcher buckets. The Researcher bucket can include source-router and writer task calls, while the Orchestrator bucket can include direct researcher calls; do not read either as role-exclusive accounting. |
 | Tool API Cost by Tool | Per-tool total cost and call count. Shown as a call-count bar when all tool costs are $0 (pricing not yet configured). |
 | Per-Query Cost Distribution | Histogram of query costs. Hidden when fewer than 10 queries are available. A long right tail means a few hard queries are inflating the average. |
-| Cost by Phase per Query | Stacked bar: one column per query, one color per phase. Spots outlier queries and identifies which phase drove the spike. |
+| Cost by Phase per Query | Stacked best-effort phase buckets per query. Use this to find outliers, then inspect the trace before attributing a spike to a role. |
 
 #### Latency
 
@@ -217,7 +227,7 @@ The most detailed tab. All statistics are over individual LLM call observations 
 | Throughput (TPS by model) | Low TPS with small OSL = network overhead, not slow generation. |
 | Token Budget (cache breakdown) | Green = cached (cheaper); grey = uncached; blue = completion. Maximize green. |
 | ISL vs Latency scatter | Diagonal trend = prompt-bound; flat cloud = compute-bound. |
-| Token Mix by Phase | Which phase consumes tokens and how much is cached per phase. |
+| Token Mix by Phase | Token and cache mix across best-effort phase buckets. Source-router and writer task calls can appear as researcher, while direct researcher calls can appear as orchestrator. |
 | NOVA-Predicted vs Actual OSL | Pre-call output length estimates vs actual. Hidden when estimates are post-hoc filled (trivially perfect, not informative). |
 
 #### Efficiency
@@ -234,11 +244,12 @@ Full per-query table: cost, ISL, OSL, cached tokens, ISL:OSL ratio, LLM call cou
 
 ### Subagent Phase Attribution
 
-The Deep Research Agent runs three logical parts: an **Orchestrator**, a **Planner**, and one or more parallel **Researcher** instances. The workflow is registered as `deep_research_agent`. NAT profiler traces still include `FUNCTION_START` / `FUNCTION_END` for **tools** (for example search), but Planner and Researcher runs are implemented **inside the `task` tool** and do not get distinct `FUNCTION_*` names. Typical traces also omit per-step metadata such as `function_ancestry` for subagent identity.
-
-Phase attribution is therefore inferred from **timing windows**: each `task` TOOL_START/END carries `subagent_type` and brackets one subagent invocation. Each `LLM_END` uses **`event_timestamp`** (completion time): if it falls inside a task window, that phase applies; otherwise orchestrator. Overlapping researcher windows (parallel invocations) are all labelled `researcher-phase` — the instance is ambiguous, but the phase is correct.
-
-Cost breakdowns by phase stay accurate without native subagent scopes in NAT. If NAT later exposes phase on each step (for example via `function_ancestry` or explicit `FUNCTION_*` boundaries for subagents), the logic in `src/aiq_agent/tokenomics/nat_adapter.py` can be simplified to read that field instead of joining on timestamps.
+The adapter in `src/aiq_agent/tokenomics/atof_adapter.py` reads Relay ATOF
+JSONL and follows scope `parent_uuid` ancestry. Calls nested below real
+`planner-agent` and `researcher-agent` scopes are attributed to those phases;
+all remaining calls use the orchestrator bucket. Parallel researcher tasks use
+isolated Relay asyncio contexts, so they retain correct parentage without
+timing-window inference.
 
 ### Python API
 
@@ -253,7 +264,7 @@ with open("frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pri
 
 pricing = PricingRegistry.from_dict(config["tokenomics"]["pricing"])
 profiles = parse_trace(
-    "frontends/benchmarks/deepresearch_bench/results/all_requests_profiler_traces.json",
+    "relay/aiq-relay.atof.jsonl",
     pricing,
 )
 

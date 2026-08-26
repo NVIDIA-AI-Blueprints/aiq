@@ -28,15 +28,28 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import threading
 import uuid
+from collections.abc import Awaitable
+from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import field
+from typing import TYPE_CHECKING
 from typing import Any
 
+from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchExecutionTimeout
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
+
 from .callbacks import AgentEventCallback
+from .callbacks import build_final_report_event
 from .event_store import BatchingEventStore
 from .event_store import EventStore
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from .crypto import ContentEncryptionPolicyIdentity
 
+logger = logging.getLogger(__name__)
 
 _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
     {
@@ -49,10 +62,22 @@ _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
         "max_research_concurrency",
         "max_concurrent_source_tool_calls",
         "max_source_tool_batch_size",
+        "resource_limits",
     }
 )
 _CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
 _JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
+_SHALLOW_RESEARCH_AGENT_KWARGS = frozenset({"max_tool_iterations", "enforce_citations"})
+
+
+@dataclass(frozen=True)
+class JobTraceCorrelation:
+    """Serializable correlation from a submitting request to an independent job trace."""
+
+    session_id: str | None = None
+    submission_trace_id: str | None = None
+    submission_span_id: str | None = None
+    request_trace_tags: dict[str, str] = field(default_factory=dict)
 
 
 def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:
@@ -73,25 +98,6 @@ def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset
         if param.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     }
     return kwarg_names.issubset(accepted_kwargs)
-
-
-def _normalize_trace_id(trace_id: int | str | None) -> int | None:
-    """Convert trace ID to integer format.
-
-    Args:
-        trace_id: Trace ID as int, hex string, or None.
-
-    Returns:
-        Integer trace ID or None.
-    """
-    if trace_id is None:
-        return None
-    if isinstance(trace_id, int):
-        return trace_id
-    try:
-        return int(trace_id, 16)
-    except ValueError:
-        return int(trace_id)
 
 
 class CancellationMonitor:
@@ -170,6 +176,199 @@ class CancellationMonitor:
 # Interval for emitting heartbeat events
 HEARTBEAT_INTERVAL_SECONDS = 30
 
+# The ghost-job reaper treats a RUNNING job with no recent activity as a dead
+# worker. But a worker can spend minutes in pre-event initialization (config,
+# providers, tools, MCP, sandbox) before it stores its first event, so from the
+# moment the job enters RUNNING we refresh a lightweight lease — job_info's
+# updated_at, the same column the reaper falls back to for a zero-event job — on
+# this interval. A slow-but-live worker keeps its lease fresh and is not reaped;
+# a genuinely dead worker stops refreshing and its lease goes stale. Keep this
+# well under GHOST_JOB_TIMEOUT_SECONDS so a live worker refreshes several times
+# before the reaper's timeout.
+LEASE_REFRESH_INTERVAL_SECONDS = 60
+RELAY_STARTUP_TIMEOUT_SECONDS = 30
+
+
+async def _ensure_relay_started_for_job(relay_config: Any, job_id: str) -> None:
+    """Start Relay without allowing observability initialization to stall a job."""
+    from aiq_agent.relay.bootstrap import ensure_started
+
+    try:
+        await asyncio.wait_for(ensure_started(relay_config), timeout=RELAY_STARTUP_TIMEOUT_SECONDS)
+    except Exception as exc:
+        logger.warning("Relay startup failed for job %s (error_type=%s)", job_id, type(exc).__name__)
+
+
+def _resolve_job_relay_config(config: Any, function_config: Any) -> Any:
+    """Prefer workflow Relay settings for a separately executed async agent."""
+    workflow_config = getattr(config, "workflow", None)
+    return getattr(workflow_config, "relay", None) or getattr(function_config, "relay", None)
+
+
+def _db_now_expr(db_url: str) -> str:
+    """Return the DB current-time SQL expression for this backend.
+
+    Accepts both ``postgresql://`` and the legacy ``postgres://`` scheme.
+    """
+    return "NOW()" if db_url.startswith(("postgresql", "postgres")) else "CURRENT_TIMESTAMP"
+
+
+def _touch_job_lease_sync(db_url: str, job_id: str) -> None:
+    """Refresh the running-job lease by bumping job_info.updated_at.
+
+    Scoped to ``status = 'running'`` so it can never resurrect the timestamp of
+    a job that has already reached a terminal state.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt, {"job_id": job_id})
+
+
+def _write_job_success_if_running_sync(db_url: str, job_id: str, stored_output: str) -> bool:
+    """Compare-and-set the job to SUCCESS with its output, only if still RUNNING.
+
+    A single guarded ``UPDATE ... WHERE status = 'running'`` so a job the reaper
+    already moved to a terminal state (e.g. it was reaped while slow to finish)
+    is never resurrected. Returns True iff this call performed the write.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'success', output = :output, updated_at = {_db_now_expr(db_url)} "
+        "WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(stmt, {"output": stored_output, "job_id": job_id})
+        return (result.rowcount or 0) == 1
+
+
+def _write_job_source_failure_if_running_sync(
+    db_url: str,
+    job_id: str,
+    public_error: str,
+    stored_output: str,
+    final_report_event: dict[str, Any] | None = None,
+    job_output_cipher: Any | None = None,
+) -> bool:
+    """Persist a source failure, then store its optional final-report event best-effort."""
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'failure', error = :error, output = :output, "
+        f"updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(
+            stmt,
+            {"error": public_error, "output": stored_output, "job_id": job_id},
+        )
+        if (result.rowcount or 0) != 1:
+            return False
+
+    if final_report_event is not None:
+        try:
+            EventStore(db_url, job_id, content_cipher=job_output_cipher).store(final_report_event)
+        except Exception as exc:
+            logger.warning(
+                "Job %s source-failure final-report event write failed exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+    return True
+
+
+def _write_job_failure_if_running_sync(db_url: str, job_id: str, public_error: str) -> bool:
+    """Compare-and-set a generic failure without changing an existing terminal job."""
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'failure', error = :error, updated_at = {_db_now_expr(db_url)} "
+        "WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(stmt, {"error": public_error, "job_id": job_id})
+        return (result.rowcount or 0) == 1
+
+
+async def _persist_empty_source_failure(
+    *,
+    error: EmptySourceRegistryError,
+    job_output_cipher: Any,
+    db_url: str,
+    job_id: str,
+    event_store: Any | None = None,
+) -> bool:
+    """Persist a typed source failure, falling back safely if output storage fails."""
+    from .crypto import serialize_job_output_for_storage
+
+    output = {
+        "report": error.generated_answer,
+        "outcome_reason": error.reason.value,
+    }
+    try:
+        stored_output = serialize_job_output_for_storage(output, job_output_cipher)
+        if event_store is not None and hasattr(event_store, "flush"):
+            await asyncio.to_thread(event_store.flush)
+        final_report_event = (
+            build_final_report_event(error.generated_answer).to_sse_dict() if error.generated_answer else None
+        )
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            _write_job_source_failure_if_running_sync,
+            db_url,
+            job_id,
+            error.public_message,
+            stored_output,
+            final_report_event,
+            job_output_cipher,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Job %s source-failure output write failed exception=%s",
+            job_id,
+            exc.__class__.__name__,
+        )
+        sanitized_error = f"job failed ({type(exc).__name__}); check server logs for details"
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            _write_job_failure_if_running_sync,
+            db_url,
+            job_id,
+            sanitized_error,
+        )
+        return False
+
+
+def _run_lease_refresher(db_url: str, job_id: str, stop_event: threading.Event) -> None:
+    """Refresh the running-job lease on a dedicated thread until signalled.
+
+    Runs in its own OS thread — not the worker event loop — so it cannot be
+    starved by synchronous cold-start work (config load, agent import) that
+    holds the loop. ``stop_event.wait`` returns True when the job ends (exit) or
+    False on timeout (refresh, then loop).
+    """
+    while not stop_event.wait(LEASE_REFRESH_INTERVAL_SECONDS):
+        try:
+            _touch_job_lease_sync(db_url, job_id)
+        except Exception as exc:  # noqa: BLE001 - a failed lease refresh must never kill the job
+            logger.debug("Lease refresh for job %s failed: %s", job_id, exc)
+
 
 async def run_with_cancellation(
     coro,
@@ -235,6 +434,136 @@ def _load_agent_class(agent_class_path: str) -> type:
     return getattr(module, class_name)
 
 
+def _get_middleware_for_listed_function(config: Any, function_name: str) -> list[str]:
+    """Return middleware directly assigned to a configured NAT function.
+
+    This reads only the function's explicit ``middleware`` list. Middleware that
+    targets functions through its own config, such as ``workflow_functions``, is
+    resolved separately because the Dask worker does not execute the registered
+    NAT function. The worker adapter must explicitly translate those configured
+    function targets into middleware around the direct agent call.
+    """
+    middleware_names: list[str] = []
+    function_config = config.functions.get(function_name)
+    if function_config is not None:
+        middleware_names.extend(function_config.middleware or [])
+
+    duplicates = {name for name in middleware_names if middleware_names.count(name) > 1}
+    if duplicates:
+        duplicate_list = ", ".join(sorted(duplicates))
+        raise ValueError(
+            f"Middleware configured multiple times for worker function `{function_name}`: {duplicate_list}"
+        )
+
+    return middleware_names
+
+
+def _validate_worker_middleware_names(config: Any, function_name: str, middleware_names: list[str]) -> None:
+    """Ensure worker-selected middleware names exist in the loaded config."""
+    missing_middleware = [name for name in middleware_names if name not in config.middleware]
+    if missing_middleware:
+        missing_list = ", ".join(sorted(missing_middleware))
+        raise ValueError(f"Middleware configured for worker function `{function_name}` is not defined: {missing_list}")
+
+
+def _get_middleware_for_worker_function(config: Any, function_name: str) -> list[str]:
+    """Return all middleware that should apply to a worker-executed function.
+
+    The Dask worker does not call the registered NAT function directly, so it
+    must reconstruct the same middleware boundary from config. This includes
+    middleware listed on the function itself and middleware that targets the
+    function by name through ``workflow_functions``.
+    """
+    middleware_names = _get_middleware_for_listed_function(config, function_name)
+
+    # Dask does not use the normal builder-created function callable, so
+    # workflow_functions targets must be translated into worker middleware here.
+    for middleware_name, middleware_config in config.middleware.items():
+        workflow_functions = getattr(middleware_config, "workflow_functions", None)
+        if isinstance(workflow_functions, dict) and function_name in workflow_functions:
+            middleware_names.append(middleware_name)
+        elif isinstance(workflow_functions, list) and function_name in workflow_functions:
+            middleware_names.append(middleware_name)
+
+    duplicates = {name for name in middleware_names if middleware_names.count(name) > 1}
+    if duplicates:
+        duplicate_list = ", ".join(sorted(duplicates))
+        raise ValueError(
+            f"Middleware configured multiple times for worker function `{function_name}`: {duplicate_list}"
+        )
+
+    _validate_worker_middleware_names(config, function_name, middleware_names)
+    return middleware_names
+
+
+async def _register_middleware(builder: Any, config: Any, middleware_names: list[str]) -> None:
+    """Ensure the worker builder can instantiate the selected middleware.
+
+    The worker has its own builder instance. Registering middleware here makes
+    the configured middleware available to the worker without changing which
+    function call is wrapped.
+    """
+    for middleware_name in middleware_names:
+        middleware_config = config.middleware[middleware_name]
+        try:
+            await builder.get_middleware(middleware_name)
+        except ValueError:
+            await builder.add_middleware(middleware_name, middleware_config)
+
+
+async def _attach_middleware_to_function(builder: Any, config: Any, agent_config_name: str) -> None:
+    """Register middleware needed by the configured function this worker represents.
+
+    Actual invocation wrapping happens later, when the worker adapts the direct
+    ``agent.run`` call into a NAT middleware chain.
+    """
+    function_config = config.functions.get(agent_config_name)
+    if function_config is None:
+        return
+
+    middleware_names = _get_middleware_for_worker_function(config, agent_config_name)
+    await _register_middleware(builder, config, middleware_names)
+
+
+async def _run_with_configured_function_middleware(
+    *,
+    builder: Any,
+    config: Any,
+    function_name: str,
+    function_config: Any,
+    input_value: Any,
+    call_next: Callable[[Any], Awaitable[Any]],
+) -> Any:
+    """Apply NAT function middleware to the callable executed by the Dask worker.
+
+    The async worker runs the agent instance directly instead of invoking the
+    registered NAT function. This adapter preserves the configured function
+    boundary by wrapping the worker callable with the middleware configured for
+    that function name.
+    """
+    if config.functions.get(function_name) is None:
+        return await call_next(input_value)
+
+    middleware_names = _get_middleware_for_worker_function(config, function_name)
+    if not middleware_names:
+        return await call_next(input_value)
+
+    from nat.middleware.function_middleware import FunctionMiddlewareChain
+    from nat.middleware.middleware import FunctionMiddlewareContext
+
+    middleware = await builder.get_middleware_list(middleware_names)
+    context = FunctionMiddlewareContext(
+        name=function_name,
+        config=function_config,
+        description=None,
+        input_schema=type(input_value),
+        single_output_schema=type(input_value),
+        stream_output_schema=type(None),
+    )
+    wrapped_call = FunctionMiddlewareChain(middleware=middleware, context=context).build_single(call_next)
+    return await wrapped_call(input_value)
+
+
 async def _create_llm_provider(builder: Any, fn_config: Any) -> tuple[Any, Any]:
     """Create a role-aware LLM provider from a NAT function config."""
     from aiq_agent.common import LLMProvider
@@ -283,18 +612,15 @@ async def run_agent_job(
     input_text: str,
     agent_class_path: str,
     agent_config_name: str,
-    parent_span_id: str | None = None,
-    parent_function_id: str | None = None,
-    parent_function_name: str | None = None,
-    parent_workflow_run_id: str | None = None,
-    parent_workflow_trace_id: int | str | None = None,
-    parent_conversation_id: str | None = None,
-    request_trace_tags: dict[str, str] | None = None,
+    trace_correlation: JobTraceCorrelation | None = None,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    content_encryption_policy: ContentEncryptionPolicyIdentity | None = None,
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
+    owner_user_id: str | None = None,
+    admission_token: str | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -303,7 +629,7 @@ async def run_agent_job(
     - Uses NAT's JobStore for status tracking
     - Monitors for cancellation requests and gracefully terminates the agent
     - Exports telemetry to Phoenix/OpenTelemetry via NAT's ExporterManager
-    - Propagates trace context from parent workflow for nested spans
+    - Starts an independent trace correlated to the submitting request and session
 
     Args:
         configure_logging: Whether to set up logging in the worker.
@@ -315,25 +641,30 @@ async def run_agent_job(
         input_text: User input/query to run.
         agent_class_path: Full module path to agent class.
         agent_config_name: NAT config function name for the agent.
-        parent_span_id: Parent span ID for trace continuity (from caller context).
-        parent_function_id: Parent function ID for span hierarchy.
-        parent_function_name: Parent function name for span metadata.
-        parent_workflow_run_id: Parent workflow run ID for trace grouping.
-        parent_workflow_trace_id: Parent trace ID (int or hex string) for trace continuity.
-        parent_conversation_id: Conversation ID for session grouping in Phoenix.
-        request_trace_tags: Request trace tags captured at async submission time.
+        trace_correlation: Session and submission identifiers used to correlate this independent job trace.
         available_documents: Optional list of document dicts with file_name and summary.
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token propagated from the HTTP request for
             data sources that require authentication (requires_auth: true).
+        content_encryption_policy: Non-secret policy identity captured by the
+            submitting API process and required to match the worker configuration.
         initial_files: Optional DeepAgents virtual filesystem files to seed into state.
         output_metadata: Optional metadata to persist alongside the final report.
+        owner_user_id: Canonical per-user key (``principal_user_id``), set on the NAT
+            Context so per_user_mcp_client retrieves the token the owner connected
+            via /v1/auth/mcp/{id}/connect.
+        admission_token: Opaque deep-research fencing token captured at submit time.
     """
+
+    trace_correlation = trace_correlation or JobTraceCorrelation()
 
     # Propagate auth token into the current async task's context so tools
     # can retrieve it via get_auth_token(). Uses a ContextVar so concurrent
     # jobs in the same Dask worker process don't leak tokens across tasks.
     _auth_token_reset = None
+    _conversation_id_reset = None
+    _user_id_reset = None
+    context_state = None
     if auth_token:
         from ._auth_context import job_auth_token
 
@@ -344,8 +675,6 @@ async def run_agent_job(
 
     install_request_trace_span_injection()
 
-    from aiq_agent.common import VerboseTraceCallback
-    from aiq_agent.common import is_verbose
     from nat.builder.framework_enum import LLMFrameworkEnum
     from nat.builder.workflow_builder import WorkflowBuilder
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
@@ -363,7 +692,10 @@ async def run_agent_job(
             std_logging.basicConfig(level=log_level)
 
     job_store: JobStore | None = None
+    job_output_cipher = None
     cancellation_monitor: CancellationMonitor | None = None
+    lease_stop: threading.Event | None = None
+    lease_thread: threading.Thread | None = None
     event_store: EventStore | BatchingEventStore | None = None
     # Sandbox runtime is released on the terminal path; interrupted forces terminate() over close().
     sandbox_runtime: Any | None = None
@@ -377,7 +709,63 @@ async def run_agent_job(
 
     try:
         job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+        if admission_token is not None:
+            from .admission import is_deep_research_reservation_current
+
+            try:
+                reservation_is_current = await asyncio.to_thread(
+                    is_deep_research_reservation_current,
+                    db_url,
+                    job_id,
+                    admission_token,
+                )
+            except Exception as exc:  # noqa: BLE001 - worker admission fails closed
+                logger.warning(
+                    "Could not verify admission fencing token for job %s (error_type=%s)",
+                    job_id,
+                    type(exc).__name__,
+                )
+                reservation_is_current = False
+            if not reservation_is_current:
+                logger.warning("Rejected job %s because its admission fencing token is no longer current", job_id)
+                await job_store.update_status(job_id, JobStatus.FAILURE, error="submission admission lease lost")
+                return
+        try:
+            from .crypto import ContentEncryptionError
+            from .crypto import ContentEncryptionPolicyMismatch
+            from .crypto import create_job_content_cipher
+            from .crypto import require_content_encryption_policy
+
+            require_content_encryption_policy(content_encryption_policy)
+            job_output_cipher = create_job_content_cipher(job_id)
+        except ContentEncryptionError as exc:
+            logger.warning(
+                "Job %s failed encryption policy/readiness before running exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+            error = (
+                "content encryption policy mismatch"
+                if isinstance(exc, ContentEncryptionPolicyMismatch)
+                else "content encryption unavailable"
+            )
+            await job_store.update_status(job_id, JobStatus.FAILURE, error=error)
+            return
+
         await job_store.update_status(job_id, JobStatus.RUNNING)
+
+        # Start refreshing the reaper lease immediately, before the slow
+        # initialization below stores any event, so a live worker in a long
+        # cold start is not mistaken for a dead one. It runs on a dedicated
+        # thread so synchronous init work can't starve it.
+        lease_stop = threading.Event()
+        lease_thread = threading.Thread(
+            target=_run_lease_refresher,
+            args=(db_url, job_id, lease_stop),
+            name=f"job-lease-{job_id}",
+            daemon=True,
+        )
+        lease_thread.start()
 
         cancellation_monitor = CancellationMonitor(
             scheduler_address=scheduler_address,
@@ -391,8 +779,25 @@ async def run_agent_job(
         # Dynamically load the agent class
         agent_cls = _load_agent_class(agent_class_path)
 
+        # Bind the submitted conversation before entering the builder context.
+        # NAT function providers may run in child contexts created while tools
+        # are built, so setting this later leaves knowledge tools on their
+        # configured fallback collection for the entire async job.
+        from nat.builder.context import ContextState
+
+        context_state = ContextState.get()
+        _conversation_id_reset = context_state.conversation_id.set(trace_correlation.session_id)
+        # Always shadow the inherited identity, including for ownerless jobs,
+        # so a reused worker context cannot expose a prior owner's MCP tokens.
+        _user_id_reset = context_state.user_id.set(owner_user_id)
+
         async with WorkflowBuilder.from_config(config=config) as builder:
+            await _attach_middleware_to_function(builder, config, agent_config_name)
+
             fn_config = builder.get_function_config(agent_config_name)
+            relay_config = _resolve_job_relay_config(config, fn_config)
+            if relay_config is not None:
+                await _ensure_relay_started_for_job(relay_config, job_id)
             if getattr(fn_config, "type", None) == "deep_research_agent":
                 from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
                 from aiq_agent.agents.deep_researcher.register import resolve_deep_research_runtime_config
@@ -424,14 +829,12 @@ async def run_agent_job(
 
             # Set up telemetry/observability for Phoenix and OpenTelemetry
             from nat.builder.context import Context
-            from nat.builder.context import ContextState
             from nat.data_models.intermediate_step import IntermediateStepPayload
             from nat.data_models.intermediate_step import IntermediateStepType
             from nat.data_models.intermediate_step import StreamEventData
             from nat.data_models.intermediate_step import TraceMetadata
             from nat.data_models.invocation_node import InvocationNode
             from nat.observability.exporter_manager import ExporterManager
-            from nat.plugins.langchain.callback_handler import LangchainProfilerHandler
             from nat.utils.reactive.subject import Subject
 
             telemetry_exporters = {
@@ -439,13 +842,11 @@ async def run_agent_job(
             }
             exporter_manager = ExporterManager.from_exporters(telemetry_exporters)
 
-            # Initialize context state with trace propagation from parent
-            context_state = ContextState.get()
+            # A durable background job is an independent trace. The submitting
+            # request is retained only as correlation metadata.
             context_state.workflow_run_id.set(job_id)
-            if parent_conversation_id:
-                context_state.conversation_id.set(parent_conversation_id)
 
-            workflow_trace_id = _normalize_trace_id(parent_workflow_trace_id) or uuid.uuid4().int
+            workflow_trace_id = uuid.uuid4().int
             context_state.workflow_trace_id.set(workflow_trace_id)
 
             # Event stream for exporters to subscribe to
@@ -456,13 +857,11 @@ async def run_agent_job(
             _ = context_state.active_span_id_stack
 
             # Set up span hierarchy metadata
-            workflow_span_name = f"async_job:{agent_config_name}"
+            workflow_span_name = agent_config_name
             context_state.active_function.set(
                 InvocationNode(
                     function_name=workflow_span_name,
                     function_id=job_id,
-                    parent_id=parent_function_id,
-                    parent_name=parent_function_name,
                 )
             )
 
@@ -472,36 +871,16 @@ async def run_agent_job(
                 provided_metadata={
                     "workflow_run_id": job_id,
                     "workflow_trace_id": f"{workflow_trace_id:032x}",
-                    "conversation_id": parent_conversation_id,
+                    "conversation_id": trace_correlation.session_id,
                     "agent": agent_class_path,
-                    "parent_workflow_run_id": parent_workflow_run_id,
-                    "parent_workflow_name": parent_function_name,
+                    "submission_trace_id": trace_correlation.submission_trace_id,
+                    "submission_span_id": trace_correlation.submission_span_id,
                 }
             )
 
             # Run with telemetry - exporter must start before pushing events
-            with request_trace_tag_context(request_trace_tags or {}):
+            with request_trace_tag_context(trace_correlation.request_trace_tags):
                 async with exporter_manager.start(context_state=context_state):
-                    # Link to parent span if provided (for nested trace continuity)
-                    parent_metadata: TraceMetadata | None = None
-                    if parent_span_id and parent_span_id != "root":
-                        parent_metadata = TraceMetadata(
-                            provided_metadata={
-                                "workflow_run_id": parent_workflow_run_id,
-                                "workflow_trace_id": f"{workflow_trace_id:032x}",
-                                "conversation_id": parent_conversation_id,
-                                "workflow_name": parent_function_name,
-                            }
-                        )
-                        context.intermediate_step_manager.push_intermediate_step(
-                            IntermediateStepPayload(
-                                UUID=parent_span_id,
-                                event_type=IntermediateStepType.SPAN_START,
-                                name=parent_function_name or "parent_workflow",
-                                metadata=parent_metadata,
-                            )
-                        )
-
                     # Push WORKFLOW_START first so LLM/tool events become children
                     context.intermediate_step_manager.push_intermediate_step(
                         IntermediateStepPayload(
@@ -513,48 +892,78 @@ async def run_agent_job(
                         )
                     )
 
-                    # Create profiler callback AFTER workflow starts (ensures correct parent)
-                    nat_profiler_callback = LangchainProfilerHandler()
+                    callbacks: list[Any] = []
 
-                    verbose = is_verbose(getattr(fn_config, "verbose", False))
-                    callbacks = [VerboseTraceCallback()] if verbose else []
-
-                    raw_event_store = EventStore(db_url, job_id)
+                    raw_event_store = EventStore(db_url, job_id, content_cipher=job_output_cipher)
                     event_store = BatchingEventStore(raw_event_store)
                     callbacks.append(AgentEventCallback(event_store))
-                    callbacks.append(nat_profiler_callback)
 
-                    # Instantiate agent with callbacks
-                    agent = _create_agent_instance(
-                        agent_cls=agent_cls,
-                        llm_provider=provider,
-                        llm=llm,
-                        tools=tools,
-                        fn_config=fn_config,
-                        verbose=verbose,
-                        callbacks=callbacks,
-                        job_id=job_id,
-                        # Artifact harvesting rides 284's job store + event stream: the same db_url
-                        # backs the SqlArtifactStore, and event_store.store carries artifact SSE
-                        # events. Inert unless sandbox.artifact_capture is enabled in config.
-                        artifact_db_url=db_url,
-                        artifact_emit=event_store.store,
-                    )
+                    # Resolve per-user MCP source tools for the job owner (Context.user_id
+                    # set above); connections stay open via mcp_stack for the agent run.
+                    # Best-effort: the helper never raises, so this can't break a job.
+                    from contextlib import AsyncExitStack
 
-                    # Capture the runtime so the terminal path can release the sandbox. None for
-                    # agents without a sandbox runtime; close()/terminate() are then no-ops.
-                    sandbox_runtime = getattr(agent, "deepagents_runtime", None)
+                    from ..mcp_auth.runtime_tools import open_per_user_mcp_tools
 
-                    # Run agent - LLM/tool events will be nested under workflow span
-                    result = await _run_agent(
-                        agent=agent,
-                        input_text=input_text,
-                        monitor=cancellation_monitor,
-                        available_documents=available_documents,
-                        data_sources=data_sources,
-                        event_store=event_store,
-                        initial_files=initial_files,
-                    )
+                    async with AsyncExitStack() as mcp_stack:
+                        mcp_tools = await open_per_user_mcp_tools(
+                            builder=builder,
+                            data_sources=data_sources,
+                            exit_stack=mcp_stack,
+                            wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+                        )
+                        agent_tools = [*tools, *mcp_tools] if mcp_tools else tools
+
+                        # Instantiate agent with callbacks
+                        agent = _create_agent_instance(
+                            agent_cls=agent_cls,
+                            llm_provider=provider,
+                            llm=llm,
+                            tools=agent_tools,
+                            fn_config=fn_config,
+                            callbacks=callbacks,
+                            job_id=job_id,
+                            # Artifact harvesting rides 284's job store + event stream: the same db_url
+                            # backs the SqlArtifactStore, and event_store.store carries artifact SSE
+                            # events. Inert unless sandbox.artifact_capture is enabled in config.
+                            artifact_db_url=db_url,
+                            artifact_emit=event_store.store,
+                        )
+
+                        # Capture the runtime so the terminal path can release the sandbox. None for
+                        # agents without a sandbox runtime; close()/terminate() are then no-ops.
+                        sandbox_runtime = getattr(agent, "deepagents_runtime", None)
+
+                        from aiq_agent.relay import run_workflow as run_relay_workflow
+
+                        async def _execute_agent() -> Any:
+                            return await _run_agent(
+                                agent=agent,
+                                input_text=input_text,
+                                builder=builder,
+                                config=config,
+                                function_name=agent_config_name,
+                                function_config=fn_config,
+                                monitor=cancellation_monitor,
+                                available_documents=available_documents,
+                                data_sources=data_sources,
+                                event_store=event_store,
+                                initial_files=initial_files,
+                            )
+
+                        result = await run_relay_workflow(
+                            f"async_{agent_config_name.removesuffix('_agent')}_job",
+                            _execute_agent,
+                            session_id=trace_correlation.session_id,
+                            input_value=input_text,
+                            metadata={
+                                "aiq.execution.mode": "async",
+                                "aiq.job.id": job_id,
+                                "aiq.agent.type": agent_config_name,
+                                "aiq.submission.trace_id": trace_correlation.submission_trace_id,
+                                "aiq.submission.span_id": trace_correlation.submission_span_id,
+                            },
+                        )
 
                     # Emit WORKFLOW_END event for Phoenix
                     context.intermediate_step_manager.push_intermediate_step(
@@ -567,35 +976,69 @@ async def run_agent_job(
                         )
                     )
 
-                    if parent_metadata:
-                        context.intermediate_step_manager.push_intermediate_step(
-                            IntermediateStepPayload(
-                                UUID=parent_span_id,
-                                event_type=IntermediateStepType.SPAN_END,
-                                name=parent_function_name or "parent_workflow",
-                                metadata=parent_metadata,
-                            )
-                        )
-
                     # Signal event stream completion
                     event_stream.on_complete()
 
-                    # Flush any buffered events before updating status
+                    # Harvest artifacts (durable, idempotent) before SUCCESS so clients cannot
+                    # stop streaming before the terminal metadata is persisted. Resource release
+                    # is deferred to the finally block: the provider's close() is unbounded, so
+                    # awaiting it here could strand a finished job in RUNNING if SDK cleanup hangs.
+                    await asyncio.to_thread(
+                        _harvest_sandbox_artifacts,
+                        sandbox_runtime,
+                        job_id=job_id,
+                        interrupted=False,
+                    )
                     if hasattr(event_store, "flush"):
                         event_store.flush()
 
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
+                    from .crypto import serialize_job_output_for_storage
+
+                    if job_output_cipher is None:
+                        raise RuntimeError("job output cipher was not initialized")
                     # Apply caller metadata first, then set the canonical report last so a
                     # stray "report" key in output_metadata can never overwrite the real report.
                     output = {**(output_metadata or {}), "report": report}
-                    await job_store.update_status(job_id, JobStatus.SUCCESS, output=output)
-                    logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    # Terminal state is immutable: write SUCCESS with a single
+                    # compare-and-set (WHERE status='running'), so if the ghost
+                    # reaper already marked this job FAILURE it is never
+                    # resurrected. Serialize/encrypt exactly as update_job_output
+                    # would, then do the guarded write.
+                    try:
+                        stored_output = serialize_job_output_for_storage(output, job_output_cipher)
+                        wrote = await asyncio.get_running_loop().run_in_executor(
+                            None, _write_job_success_if_running_sync, db_url, job_id, stored_output
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Job %s encrypted output write failed exception=%s",
+                            job_id,
+                            exc.__class__.__name__,
+                        )
+                        raise
+                    if wrote:
+                        logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    else:
+                        logger.warning("Job %s already terminal; skipping success write", job_id)
 
     except asyncio.CancelledError:
         logger.info("Job %s cancelled", job_id)
         interrupted = True
+        if event_store is None:
+            event_store = BatchingEventStore(EventStore(db_url, job_id))
+
+        await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=True)
+        _store_terminal_event_best_effort(
+            event_store,
+            {
+                "type": "job.cancelled",
+                "data": {"reason": "cancelled by user"},
+            },
+        )
+
         if job_store:
             try:
                 job = await job_store.get_job(job_id)
@@ -604,63 +1047,145 @@ async def run_agent_job(
             except (ConnectionError, TimeoutError, RuntimeError):
                 pass
 
+    except EmptySourceRegistryError as e:
+        logger.info("Job %s failed because no research sources were available (%s)", job_id, e.reason.value)
         if event_store is None:
-            event_store = BatchingEventStore(EventStore(db_url, job_id))
+            event_store = BatchingEventStore(EventStore(db_url, job_id, content_cipher=job_output_cipher))
 
-        event_store.store(
-            {
-                "type": "job.cancelled",
-                "data": {"reason": "cancelled by user"},
-            }
+        await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
+        wrote = await _persist_empty_source_failure(
+            error=e,
+            job_output_cipher=job_output_cipher,
+            db_url=db_url,
+            job_id=job_id,
+            event_store=event_store,
         )
-        if hasattr(event_store, "flush"):
-            event_store.flush()
+        if wrote:
+            logger.info("Job %s persisted source-failure outcome", job_id)
+        else:
+            logger.warning("Job %s already terminal or source-failure output persistence failed", job_id)
 
     except Exception as e:
-        logger.exception("Job %s failed: %s", job_id, type(e).__name__)
-        if job_store:
-            await job_store.update_status(job_id, JobStatus.FAILURE, error=str(e))
-
+        resource_timeout = isinstance(e, DeepResearchExecutionTimeout)
+        if resource_timeout:
+            # A timed-out graph may still have a blocking provider call running
+            # outside the event loop. Terminate its sandbox before persisting the
+            # failure so external execution cannot outlive the job deadline.
+            interrupted = True
+            await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=True)
+        # Tracebacks include ``str(e)`` and can therefore expose provider
+        # request content, credentials, or internal endpoints. Keep the error
+        # type and a stable content fingerprint without emitting raw details.
+        logger.error(
+            "Job %s failed (error_type=%s detail_%s)",
+            job_id,
+            type(e).__name__,
+            log_content_metadata(e),
+        )
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
-        event_store.store(
+        # Persist only the exception class name: raw messages can embed
+        # credentials or internal hostnames, and both the event stream and the
+        # stored status are surfaced to the job's caller.
+        sanitized_error = f"job failed ({type(e).__name__}); check server logs for details"
+        if not resource_timeout:
+            await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
+        _store_terminal_event_best_effort(
+            event_store,
             {
                 "type": "job.error",
                 "data": {
-                    "error": str(e),
+                    "error": sanitized_error,
                     "error_type": type(e).__name__,
                 },
-            }
+            },
         )
-        if hasattr(event_store, "flush"):
-            event_store.flush()
+        if job_store:
+            await job_store.update_status(job_id, JobStatus.FAILURE, error=sanitized_error)
 
     finally:
         # Ensure terminal-path events are not left in the batch buffer.
-        if event_store is not None and hasattr(event_store, "flush"):
-            event_store.flush()
+        await _flush_event_store(event_store, job_id=job_id)
+        if lease_stop is not None:
+            lease_stop.set()
+        if lease_thread is not None:
+            await asyncio.to_thread(lease_thread.join, 5)
         if cancellation_monitor:
             cancellation_monitor.stop()
-        # Release the sandbox off the event loop so the SDK session close never blocks the Dask
-        # worker. The single artifact harvest already ran in agent.run() before this point, so
-        # teardown only closes/terminates; interrupted jobs terminate() to preempt a live execute.
+        # Idempotent fallback for failures before a terminal branch finalized the runtime.
         await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=interrupted)
-        # Clean up job-scoped auth token
+        await _flush_event_store(event_store, job_id=job_id)
+        # Restore job-scoped ContextVars for worker task reuse.
+        if _user_id_reset is not None and context_state is not None:
+            context_state.user_id.reset(_user_id_reset)
+        if _conversation_id_reset is not None and context_state is not None:
+            context_state.conversation_id.reset(_conversation_id_reset)
         if _auth_token_reset is not None:
             from ._auth_context import job_auth_token
 
             job_auth_token.reset(_auth_token_reset)
 
 
-def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
-    """Release sandbox resources on a terminal path (best-effort, never raises).
+def _store_terminal_event_best_effort(event_store, event: dict) -> None:
+    """Persist a terminal event without masking the job's terminal status."""
+    try:
+        event_store.store(event)
+        if hasattr(event_store, "flush"):
+            event_store.flush()
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist terminal event %s for job %s exception=%s",
+            event.get("type", "unknown"),
+            event_store.job_id,
+            exc.__class__.__name__,
+        )
 
-    Interrupted jobs (cancel/timeout) call ``terminate()`` so a still-running ``execute`` is
-    forcibly preempted; normal paths call ``close()`` gracefully. Both are idempotent. This runs
-    off the event loop (``asyncio.to_thread``) so the SDK session close cannot block the worker.
+
+def _harvest_sandbox_artifacts(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
+    """Persist captured artifacts on a terminal path without releasing the sandbox."""
+    if sandbox_runtime is None:
+        return
+    finalize_artifacts = getattr(sandbox_runtime, "finalize_artifacts", None)
+    if callable(finalize_artifacts):
+        try:
+            finalize_artifacts(interrupted=interrupted)
+        except Exception as exc:  # noqa: BLE001 - artifact capture cannot replace the job result
+            logger.warning(
+                "Terminal artifact harvest failed for job %s exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+
+
+async def _flush_event_store(event_store: Any | None, *, job_id: str) -> None:
+    """Flush terminal events off-loop without replacing the job result."""
+    if event_store is None or not hasattr(event_store, "flush"):
+        return
+    try:
+        await asyncio.to_thread(event_store.flush)
+    except Exception as exc:  # noqa: BLE001 - terminal observability must not replace the job result
+        logger.warning("Event store flush failed for job %s (%s)", job_id, type(exc).__name__)
+
+
+def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
+    """Harvest artifacts and release sandbox resources on a terminal path.
+
+    Prefers ``finalize(interrupted=...)`` when available. On the legacy fallback,
+    interrupted/cancelled jobs call ``terminate()`` so a still-running ``execute`` is forcibly
+    preempted; normal failure and success paths call ``close()`` gracefully. Both are idempotent.
+    This runs off the event loop (``asyncio.to_thread``) so SDK cleanup cannot block the worker.
     """
     if sandbox_runtime is None:
+        return
+    _harvest_sandbox_artifacts(sandbox_runtime, job_id=job_id, interrupted=interrupted)
+    finalize = getattr(sandbox_runtime, "finalize", None)
+    if callable(finalize):
+        try:
+            if not finalize(interrupted=interrupted):
+                logger.warning("Sandbox cleanup reported failure for job %s", job_id)
+        except Exception as exc:  # noqa: BLE001 - cleanup must never replace the job result
+            logger.warning("Sandbox cleanup failed for job %s (%s)", job_id, type(exc).__name__)
         return
     teardown = getattr(sandbox_runtime, "terminate", None) if interrupted else None
     if teardown is None:
@@ -669,8 +1194,11 @@ def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: 
         return
     try:
         teardown()
-    except Exception:  # noqa: BLE001 - cleanup must never raise on the terminal path
-        logger.warning("Sandbox cleanup failed for job %s", job_id, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - cleanup must never raise on the terminal path
+        # Secret-safe: log only the exception type. A provider cleanup error can carry a
+        # credential or internal hostname, which must never reach the logs (matches the
+        # finalize_artifacts handler above).
+        logger.warning("Sandbox cleanup failed for job %s (%s)", job_id, type(exc).__name__)
 
 
 def _create_agent_instance(
@@ -679,7 +1207,6 @@ def _create_agent_instance(
     llm,
     tools: list,
     fn_config,
-    verbose: bool,
     callbacks: list,
     job_id: str | None = None,
     artifact_db_url: str | None = None,
@@ -692,10 +1219,12 @@ def _create_agent_instance(
     1. DeepResearcherAgent explicit config pattern
     2. llm_provider + tools + config/job_id pattern
     3. llm_provider + tools + job_id pattern
-    4. llm_provider + tools pattern
-    5. llm + tools pattern (simpler agents)
+    4. ShallowResearcherAgent config pattern
+    5. llm_provider + tools pattern
+    6. llm + tools pattern (simpler agents)
     """
     from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+    from aiq_agent.agents.shallow_researcher.register import ShallowResearchAgentConfig
 
     if isinstance(fn_config, DeepResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
         agent_cls, _DEEP_RESEARCH_AGENT_KWARGS
@@ -703,7 +1232,6 @@ def _create_agent_instance(
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            verbose=verbose,
             callbacks=callbacks,
             domain_catalog_path=fn_config.domain_catalog_path,
             enable_source_router=fn_config.enable_source_router,
@@ -716,6 +1244,7 @@ def _create_agent_instance(
             max_research_concurrency=fn_config.max_research_concurrency,
             max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
             max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
+            resource_limits=fn_config.resource_limits,
         )
 
     if _constructor_accepts_explicit_kwargs(agent_cls, _CONFIGURABLE_AGENT_KWARGS):
@@ -723,7 +1252,6 @@ def _create_agent_instance(
             return agent_cls(
                 llm_provider=llm_provider,
                 tools=tools,
-                verbose=verbose,
                 callbacks=callbacks,
                 config=fn_config,
                 job_id=job_id,
@@ -736,30 +1264,28 @@ def _create_agent_instance(
             return agent_cls(
                 llm_provider=llm_provider,
                 tools=tools,
-                verbose=verbose,
                 callbacks=callbacks,
                 job_id=job_id,
             )
         except TypeError:
             pass
 
-    # Try original deep_researcher pattern (llm_provider + tools + verbose)
-    try:
+    if isinstance(fn_config, ShallowResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
+        agent_cls, _SHALLOW_RESEARCH_AGENT_KWARGS
+    ):
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            verbose=verbose,
+            max_tool_iterations=fn_config.max_tool_iterations,
+            enforce_citations=fn_config.enforce_citations,
             callbacks=callbacks,
         )
-    except TypeError:
-        pass
 
-    # Try llm_provider + tools pattern (ShallowResearcherAgent style)
+    # Try the common llm_provider + tools pattern.
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 5),
             callbacks=callbacks,
         )
     except TypeError:
@@ -783,6 +1309,10 @@ async def _run_agent(
     agent,
     input_text: str,
     monitor: CancellationMonitor,
+    builder: Any | None = None,
+    config: Any | None = None,
+    function_name: str | None = None,
+    function_config: Any | None = None,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     event_store: EventStore | None = None,
@@ -849,10 +1379,23 @@ async def _run_agent(
             if available_documents:
                 state["available_documents"] = available_documents
 
-        return await run_with_cancellation(
-            agent.run(state),
-            monitor,
-            event_store=event_store,
+        async def call_next(current_state: Any) -> Any:
+            return await run_with_cancellation(
+                agent.run(current_state),
+                monitor,
+                event_store=event_store,
+            )
+
+        if builder is None or config is None or function_name is None or function_config is None:
+            return await call_next(state)
+
+        return await _run_with_configured_function_middleware(
+            builder=builder,
+            config=config,
+            function_name=function_name,
+            function_config=function_config,
+            input_value=state,
+            call_next=call_next,
         )
 
     raise TypeError(f"Agent {type(agent).__name__} does not have a run method")
@@ -943,6 +1486,8 @@ async def run_deep_research(
 
     Preserved for backwards compatibility. New code should use run_agent_job directly.
     """
+    from .crypto import get_content_encryption_policy_identity
+
     await run_agent_job(
         configure_logging=configure_logging,
         log_level=log_level,
@@ -953,4 +1498,5 @@ async def run_deep_research(
         input_text=input_text,
         agent_class_path="aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
         agent_config_name="deep_research_agent",
+        content_encryption_policy=get_content_encryption_policy_identity(),
     )

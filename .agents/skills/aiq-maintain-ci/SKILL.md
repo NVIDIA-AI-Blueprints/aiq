@@ -38,16 +38,18 @@ keep the gate working and must not weaken security or review rules.
   commands CI mirrors.
 - `.github/workflows/ci.yml`: jobs `pre-commit`, `test` (pytest + coverage),
   `helm-lint`, `test-scripts`. The `pre-commit` job runs Ruff separately and
-  `SKIP=ruff-check,ruff-format,pytest,helm-lint pre-commit run --all-files` — so
-  pytest/helm-lint run as their own jobs, not via the hook.
+  skips the push-stage pytest and Helm hooks when it runs
+  `pre-commit run --all-files` — those checks run as their own jobs instead.
 - `.github/workflows/ui.yml`: jobs `install`, `lint`, `type-check`, `unit-test`,
   `build`.
 - `.github/workflows/skills-eval.yml`: the Skills Eval gate (push +
   `workflow_dispatch`; `detect-changes` path gate → `generate-datasets` spec
   validation → `harbor-eval` on the self-hosted `aiq-eval` runner).
 - `.github/workflows/request-nvskills-ci.yml`: comment-triggered NVSkills CI.
-- `.pre-commit-config.yaml`: the hook set. Note `pytest` and `helm-lint` are
-  `stages: [push]` (see the reference for what that means locally).
+- `.pre-commit-config.yaml`: the hook set. Note `pytest-root`, `pytest-mcp`, and
+  `helm-lint` are `stages: [push]` (see the reference for what that means
+  locally). Root and MCP pytest checks use their own uv projects; MCP is not a
+  root dependency group.
 - `.github/CODEOWNERS`, `.coderabbit.yaml`, `.github/copy-pr-bot.yaml`: review
   routing, path-scoped automated review, and the PR mirror.
 

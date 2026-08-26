@@ -21,9 +21,31 @@ from google_scholar_paper_search.paper_search import PaperSearchTool
 
 @pytest.fixture
 def paper_search_tool():
-    """Create a PaperSearchTool instance for testing."""
+    """Create a PaperSearchTool instance (Serper default) for testing."""
     return PaperSearchTool(
         serper_api_key="test-api-key",
+        timeout=30,
+        max_results=10,
+    )
+
+
+@pytest.fixture
+def serpapi_tool():
+    """Create a PaperSearchTool instance configured for SerpAPI."""
+    return PaperSearchTool(
+        provider="serpapi",
+        serpapi_api_key="test-serpapi-key",  # pragma: allowlist secret
+        timeout=30,
+        max_results=10,
+    )
+
+
+@pytest.fixture
+def searchapi_tool():
+    """Create a PaperSearchTool instance configured for SearchAPI."""
+    return PaperSearchTool(
+        provider="searchapi",
+        searchapi_api_key="test-searchapi-key",  # pragma: allowlist secret
         timeout=30,
         max_results=10,
     )
@@ -55,8 +77,83 @@ def sample_serper_response():
 
 
 @pytest.fixture
+def sample_serpapi_response():
+    """Sample SerpAPI response (shape matches serpapi.com docs)."""
+    return {
+        "search_metadata": {"status": "Success"},
+        "organic_results": [
+            {
+                "position": 0,
+                "title": "Attention Is All You Need",
+                "result_id": "abc123",
+                "link": "https://arxiv.org/abs/1706.03762",
+                "snippet": "The dominant sequence transduction models...",
+                "publication_info": {
+                    "summary": "A Vaswani, N Shazeer, N Parmar... - Advances in neural information..., 2017 - arxiv.org"
+                },
+                "inline_links": {
+                    "cited_by": {
+                        "total": 50000,
+                        "link": "https://scholar.google.com/scholar?cites=123",
+                    },
+                },
+            },
+            {
+                "position": 1,
+                "title": "BERT: Pre-training of Deep Bidirectional Transformers",
+                "link": "https://arxiv.org/abs/1810.04805",
+                "snippet": "We introduce a new language model...",
+                "publication_info": {
+                    "summary": "J Devlin, MW Chang, K Lee, K Toutanova - arXiv preprint, 2018 - arxiv.org"
+                },
+                "inline_links": {
+                    "cited_by": {"total": 40000},
+                },
+            },
+        ],
+    }
+
+
+@pytest.fixture
+def sample_searchapi_response():
+    """Sample SearchAPI response (shape matches searchapi.io docs)."""
+    return {
+        "search_metadata": {"status": "Success"},
+        "organic_results": [
+            {
+                "position": 1,
+                "title": "Attention Is All You Need",
+                "data_cid": "abc123",
+                "link": "https://arxiv.org/abs/1706.03762",
+                "publication": (
+                    "A Vaswani, N Shazeer, N Parmar... - Advances in neural information..., 2017 - arxiv.org"
+                ),
+                "snippet": "The dominant sequence transduction models...",
+                "inline_links": {
+                    "cited_by": {
+                        "cites_id": "123",
+                        "total": 50000,
+                        "link": "https://scholar.google.com/scholar?cites=123",
+                    }
+                },
+            },
+            {
+                "position": 2,
+                "title": "BERT: Pre-training of Deep Bidirectional Transformers",
+                "link": "https://arxiv.org/abs/1810.04805",
+                "publication": "J Devlin, MW Chang, K Lee, K Toutanova - 2018 - arxiv.org",
+                "snippet": "We introduce a new language model...",
+                "inline_links": {
+                    "cited_by": {"total": 40000},
+                },
+            },
+        ],
+    }
+
+
+@pytest.fixture
 def sample_papers():
-    """Sample paper data for format testing."""
+    """Sample normalized paper data for format testing."""
     return [
         {
             "title": "Test Paper 1",

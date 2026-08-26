@@ -17,35 +17,47 @@
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 import aiofiles
 from langchain_core.messages import HumanMessage
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import ValidationError
 
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_checkpointer
-from aiq_agent.common import is_verbose
 from aiq_agent.common.citation_verification import get_or_create_session_registry
 from aiq_agent.common.citation_verification import reset_session_registry
 from aiq_agent.common.citation_verification import set_session_registry
+from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
+from aiq_agent.relay.bootstrap import ensure_started as _ensure_relay_started
+from aiq_agent.relay.config import RelayConfig
+from aiq_agent.relay.runtime import ainvoke_with_relay
+from aiq_agent.relay.runtime import run_workflow
 from nat.builder.builder import Builder
 from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
-from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
+from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from .models import ChatResearcherResponse
 from .models import ChatResearcherState
+from .models import WorkflowFailure
+from .models import WorkflowSuccess
+from .utils import _extract_database_name_from_request_metadata
 from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
@@ -55,6 +67,41 @@ logger = logging.getLogger(__name__)
 _REPORT_ASK_TIMEOUT_S = 120
 
 _ensure_otel_redaction_registered()
+
+
+def _log_conversation_reference(message: str, conversation_id: str) -> None:
+    """Log a correlation reference without exposing the conversation identifier."""
+    logger.info(message, log_identifier_ref(conversation_id))
+
+
+def _render_workflow_response(
+    result: ChatResearcherState | dict[str, Any],
+    *,
+    model: str,
+    response_id: str = "research_response",
+) -> ChatResearcherResponse:
+    """Render chat text and an explicit terminal outcome at the workflow boundary."""
+    if isinstance(result, dict):
+        messages = result.get("messages", [])
+        raw_outcome = result.get("workflow_outcome")
+    else:
+        messages = result.messages
+        raw_outcome = result.workflow_outcome
+
+    if messages:
+        response_content = messages[-1].content
+    else:
+        response_content = "No response generated."
+        raw_outcome = raw_outcome or WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    if not isinstance(response_content, str):
+        response_content = str(response_content)
+
+    if isinstance(raw_outcome, dict) and raw_outcome.get("status") == "failed":
+        raw_outcome = WorkflowFailure.model_validate(raw_outcome)
+    outcome = raw_outcome if isinstance(raw_outcome, WorkflowFailure) else WorkflowSuccess(result=response_content)
+    response = _create_chat_response(response_content, response_id=response_id, model=model)
+    return ChatResearcherResponse(**response.model_dump(), workflow_outcome=outcome)
 
 
 def _build_report_ask_prompt(
@@ -94,10 +141,13 @@ async def _answer_from_report_context(
         source_summary_markdown=source_summary_markdown,
     )
     try:
-        response = await asyncio.wait_for(llm.ainvoke([HumanMessage(content=prompt)]), timeout=_REPORT_ASK_TIMEOUT_S)
+        response = await asyncio.wait_for(
+            ainvoke_with_relay(llm, [HumanMessage(content=prompt)]),
+            timeout=_REPORT_ASK_TIMEOUT_S,
+        )
     except TimeoutError:
         logger.warning("Report ask LLM call timed out after %ss", _REPORT_ASK_TIMEOUT_S)
-        return "The report service took too long to respond. Please try again."
+        raise
     content = response.content if hasattr(response, "content") else response
     answer = content if isinstance(content, str) else str(content)
     if not answer.strip():
@@ -156,7 +206,6 @@ class IntentClassifierConfig(FunctionBaseConfig, name="intent_classifier"):
         default_factory=list,
         description="Tool names to exclude when inheriting from registry.",
     )
-    verbose: bool = Field(default=False)
     llm_timeout: float = Field(
         default=90,
         description="Timeout in seconds for the intent-classification LLM call. Default 90 if not set.",
@@ -183,8 +232,7 @@ async def intent_classifier(config: IntentClassifierConfig, builder: Builder):
         excluded = set(config.exclude_tools)
         tools = [t for t in tools if getattr(t, "name", "") not in excluded]
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback()] if verbose else []
+    callbacks: list[Any] = []
 
     tools_info = [{"name": getattr(t, "name", str(t)), "description": getattr(t, "description", "")} for t in tools]
     classifier = IntentClassifier(
@@ -205,6 +253,53 @@ async def intent_classifier(config: IntentClassifierConfig, builder: Builder):
     )
 
 
+class ContextAwareIntentRouterConfig(FunctionBaseConfig, name="context_aware_intent_router"):
+    """Configuration for catalog-aware entry routing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm: LLMRef = Field(..., description="LLM to use")
+    catalog_tool: FunctionRef
+    catalog_source_id: str = Field(default="gsf", min_length=1)
+    max_catalog_results: int = Field(default=10, ge=1, le=100)
+    catalog_confidence_threshold: float = Field(default=0.6, ge=0, le=1)
+    catalog_max_distance: float = Field(default=0.75, gt=0)
+    verbose: bool = Field(default=False)
+    llm_timeout: float = Field(
+        default=90,
+        gt=0,
+        description="Overall timeout in seconds across the initial routing call and any protocol-correction attempt.",
+    )
+
+
+@register_function(config_type=ContextAwareIntentRouterConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
+async def context_aware_intent_router(config: ContextAwareIntentRouterConfig, builder: Builder):
+    """Route chat requests through catalog discovery when research is required."""
+    from aiq_agent.common import load_prompt
+
+    from .nodes import ContextAwareIntentRouter
+
+    llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+    tools = await builder.get_tools(tool_names=[config.catalog_tool], wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+    if len(tools) != 1:
+        raise ValueError("context_aware_intent_router requires exactly one catalog tool")
+
+    prompt = load_prompt(Path(__file__).parent / "prompts", "context_aware_intent_router.j2")
+    callbacks = [VerboseTraceCallback()] if config.verbose else []
+    router = ContextAwareIntentRouter(
+        llm,
+        tools[0],
+        prompt,
+        catalog_source_id=config.catalog_source_id,
+        max_catalog_results=config.max_catalog_results,
+        catalog_confidence_threshold=config.catalog_confidence_threshold,
+        catalog_max_distance=config.catalog_max_distance,
+        callbacks=callbacks,
+        llm_timeout=config.llm_timeout,
+    )
+    yield FunctionInfo.from_fn(router.run, description="Catalog-aware intent and research routing.")
+
+
 ########################################################
 # Chat Deep Researcher Agent
 ########################################################
@@ -215,16 +310,17 @@ class ChatDeepResearcherConfig(FunctionBaseConfig, name="chat_deepresearcher_age
     max_history: int = Field(
         default=20, description="Maximum number of messages to keep in history before invoking the agent"
     )
-    verbose: bool = Field(default=False, description="Enable verbose logging")
     enable_clarifier: bool = Field(default=False, description="Enable clarification of research queries")
     use_async_deep_research: bool = Field(
         default=False,
         description="Submit deep research as an async job instead of running inline",
     )
+    hybrid_research_agent: FunctionRef | None = Field(default=None, description="Optional hybrid research function")
     checkpoint_db: str = Field(
         default="./checkpoints.db",
         description="SQLite database path or Postgres DSN for persistent checkpoints.",
     )
+    relay: RelayConfig = Field(default_factory=RelayConfig, description="NeMo Relay plugins and export destinations")
 
 
 @register_function(config_type=ChatDeepResearcherConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -235,9 +331,10 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     Coordinates intent classification, depth routing, and research agents
     to produce research results based on user queries.
     """
+    await _ensure_relay_started(config.relay)
+
     import os
     import sys
-    from pathlib import Path
 
     # Validate API keys early by checking the config file
     # This works for both nat run and interactive CLI
@@ -284,7 +381,11 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 api_key_error_response = _create_chat_response(error_msg, response_id="api_key_error")
         except Exception as e:
             # If validation fails for other reasons (e.g., file can't be read), log but don't block
-            logger.debug(f"Failed to validate API keys from config: {e}")
+            logger.debug(
+                "Failed to validate API keys from config (error_type=%s detail_%s)",
+                type(e).__name__,
+                log_content_metadata(e),
+            )
 
     from aiq_agent.common import filter_tools_by_sources
 
@@ -295,6 +396,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     shallow_research_fn = await builder.get_function("shallow_research_agent")
     deep_research_fn = await builder.get_function("deep_research_agent")
     clarifier_fn = await builder.get_function("clarifier_agent") if config.enable_clarifier else None
+    hybrid_research_fn = (
+        await builder.get_function(config.hybrid_research_agent) if config.hybrid_research_agent else None
+    )
 
     # Get deep research tools for early validation
     deep_research_config = builder.get_function_config("deep_research_agent")
@@ -319,6 +423,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         """
         from aiq_agent.common import format_tool_unavailability_error
         from aiq_agent.common import validate_tool_availability
+        from aiq_agent.common.data_source_registry import get_source
+
+        # Per-user MCP sources (e.g. Google Drive) contribute NO tools to the
+        # static startup list — their tools are resolved per-user at run time by
+        # open_per_user_mcp_tools (in the async worker). So a selected, configured
+        # per-user MCP source is a valid runtime tool candidate here; rejecting it
+        # against the static list would block the job before it ever submits.
+        # Connectivity is enforced separately by the submit preflight
+        # (submit_agent_job -> evaluate_mcp_auth, which returns mcp_auth_required
+        # when not connected), and the authoritative tool check runs after
+        # resolution.
+        if data_sources:
+            for source_id in data_sources:
+                source = get_source(source_id)
+                if source and source.per_user_auth and source.per_user_auth.required:
+                    return True, ""
 
         selected_tools = filter_tools_by_sources(deep_research_tools, data_sources)
 
@@ -332,8 +452,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
         return True, ""
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback()] if verbose else []
+    callbacks: list[Any] = []
 
     # LLM for inline report Q&A: prefer the report writer model, fall back to the
     # deep researcher's orchestrator LLM (always configured). Report ask is a single
@@ -417,6 +536,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             edit_instruction=instruction,
             source_summary=report_context.source_summary_markdown,
             parent_context=report_context.model_dump_json(indent=2, exclude={"report_markdown"}),
+            callbacks=callbacks,
         )
 
     async def _build_report_seed_files(state: ChatResearcherState) -> dict[str, str]:
@@ -433,12 +553,17 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
             from aiq_agent.auth import get_auth_token
-            from aiq_agent.auth import get_current_principal
+            from aiq_api.jobs.access import require_verified_principal
             from aiq_api.jobs.submit import submit_agent_job
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
-                principal = get_current_principal()
-                owner = principal.email if principal and principal.email else "anonymous"
+                # Resolve the principal the same way the connect/status routes do, so the
+                # job's per-user MCP token key (principal_user_id) matches where the token
+                # was stored at connect time. Keying off `owner` (email) instead would
+                # mismatch the connect key ("{type}:{sub}") and trigger interactive re-auth
+                # for an already-connected source.
+                principal = require_verified_principal()
+                owner = principal.email or principal.sub
                 query = state.original_query
                 if not query:
                     if not state.messages:
@@ -471,7 +596,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     agent_type="deep_researcher",
                     input_text=input_text,
                     owner=owner,
-                    principal=principal,
+                    principal=principal,  # ensures worker token key == connect-time key
                     available_documents=available_docs,
                     data_sources=state.data_sources,
                     auth_token=get_auth_token(),
@@ -503,14 +628,14 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         report_edit_job_submitter=report_edit_job_submitter,
         report_edit_fn=_inline_report_edit,
         report_seed_files_fn=_build_report_seed_files,
+        hybrid_research_fn=hybrid_research_fn.ainvoke if hybrid_research_fn else None,
         checkpointer=checkpointer,
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
 
-    async def _run(query: object) -> ChatResponse:
+    async def _run_impl(query: object, nat_context_conversation_id: str) -> ChatResearcherResponse:
         import os
         import sys
-        import uuid
 
         # Check if API keys are missing and return graceful error response
         if api_key_error_response:
@@ -525,20 +650,23 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
                 threading.Thread(target=exit_after_error, daemon=False).start()
 
-            return api_key_error_response
+            return ChatResearcherResponse(
+                **api_key_error_response.model_dump(),
+                workflow_outcome=WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            )
 
-        # For --input mode, use a fresh conversation_id to avoid loading old checkpoint state
-        # This ensures each run starts with a clean conversation history
         if "--input" in sys.argv:
-            nat_context_conversation_id = str(uuid.uuid4())
-            logger.info("Using fresh conversation ID for --input mode: %s", nat_context_conversation_id)
+            _log_conversation_reference(
+                "Using fresh conversation reference for --input mode: %s",
+                nat_context_conversation_id,
+            )
+        elif Context.get().conversation_id:
+            _log_conversation_reference("Thread reference for checkpointing: %s", nat_context_conversation_id)
         else:
-            nat_context_conversation_id = Context.get().conversation_id
-            if not nat_context_conversation_id:
-                nat_context_conversation_id = str(uuid.uuid4())
-                logger.info("No conversation-id header; generated thread ID: %s", nat_context_conversation_id)
-            else:
-                logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
+            _log_conversation_reference(
+                "No conversation-id header; generated thread reference: %s",
+                nat_context_conversation_id,
+            )
 
         from aiq_agent.auth import get_current_principal
 
@@ -566,11 +694,25 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 pass
         logger.info("skip_clarifier=%s", skip_clarifier)
 
-        request_context = _extract_query_context(query)
+        try:
+            request_context = _extract_query_context(query)
+            if request_context.database_name is None:
+                request_context.database_name = _extract_database_name_from_request_metadata(Context.get().metadata)
+        except ValidationError:
+            logger.warning("Rejected chat request with an invalid database scope")
+            invalid_scope_response = _create_chat_response(
+                "The requested database scope is invalid. Please select a valid database.",
+                response_id="invalid_database_scope",
+                model=workflow_id,
+            )
+            return ChatResearcherResponse(
+                **invalid_scope_response.model_dump(),
+                workflow_outcome=WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            )
         query_text = request_context.query_text
         data_sources = request_context.data_sources
-        logger.info("ChatDeepResearcherAgent: %s", query_text)
-        logger.info("ChatDeepResearcherAgent: Data sources: %s", data_sources)
+        logger.info("ChatDeepResearcherAgent query_%s", log_content_metadata(query_text))
+        logger.info("ChatDeepResearcherAgent: data_source_count=%d", len(data_sources or []))
 
         # Fetch available documents with summaries from SQLite registry
         # The registry is populated by backends during ingestion (backend-agnostic)
@@ -582,21 +724,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             collection_name = Context.get().conversation_id if Context.get() else None
 
             if collection_name:
+                collection_ref = log_identifier_ref(collection_name)
                 available_documents = await get_available_documents_async(collection_name)
                 if available_documents:
                     logger.info(
-                        "Loaded %d document summaries from DB for collection %s",
+                        "Loaded %d document summaries from DB for collection_ref=%s",
                         len(available_documents),
-                        collection_name,
+                        collection_ref,
                     )
                     for doc in available_documents:
                         logger.debug("  [summary] [file]: %s", "available" if doc.summary else "none")
                 else:
-                    logger.info("No document summaries in DB for collection %s", collection_name)
+                    logger.info("No document summaries in DB for collection_ref=%s", collection_ref)
             else:
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
-            logger.warning("Could not fetch available documents: %s", e)
+            logger.warning("Could not fetch available documents (%s)", type(e).__name__)
         # Resolve the report to follow up on: client-supplied id wins, else default to the last
         # completed report in this conversation (server-side, so any client gets follow-up).
         _ctx = Context.get()
@@ -608,7 +751,10 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             is_input_mode="--input" in sys.argv,
         )
         if effective_report_job_id and not request_context.active_report_job_id:
-            logger.info("Defaulting report follow-up to last report %s in conversation", effective_report_job_id)
+            logger.info(
+                "Defaulting report follow-up to report_ref=%s",
+                log_identifier_ref(effective_report_job_id),
+            )
 
         # Set session-scoped source registry for citation verification across turns.
         # When no conversation ID is available, get_or_create_session_registry returns a
@@ -620,6 +766,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 messages=[HumanMessage(content=query_text)],
                 user_info=user_info_dict,
                 data_sources=data_sources,
+                database_name=request_context.database_name,
                 available_documents=available_documents,
                 skip_clarifier=skip_clarifier,
                 active_report_job_id=effective_report_job_id,
@@ -628,16 +775,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         finally:
             reset_session_registry(token)
 
-        if isinstance(result, dict):
-            messages = result.get("messages", [])
-        else:
-            messages = getattr(result, "messages", [])
-
-        if messages:
-            response_content = messages[-1].content
-        else:
-            response_content = "No response generated."
-        # return _create_chat_response(response_content, response_id="research_response")
+        response = _render_workflow_response(result, model=workflow_id)
 
         # Exit after response when --input is provided
         if "--input" in sys.argv:
@@ -650,6 +788,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
             threading.Thread(target=exit_after_response, daemon=False).start()
 
-        return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
+        return response
+
+    async def _run(query: object) -> ChatResearcherResponse:
+        import sys
+        import uuid
+
+        context = Context.get()
+        nat_context_conversation_id = (
+            str(uuid.uuid4()) if "--input" in sys.argv or not context.conversation_id else context.conversation_id
+        )
+
+        return await run_workflow(
+            workflow_id,
+            lambda: _run_impl(query, nat_context_conversation_id),
+            session_id=nat_context_conversation_id,
+            input_value=query,
+        )
 
     yield FunctionInfo.from_fn(_run, description="Chat deep researcher with intent routing and escalation.")

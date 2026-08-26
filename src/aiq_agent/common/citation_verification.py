@@ -40,6 +40,8 @@ from collections.abc import Callable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from enum import StrEnum
+from html import escape
 from html import unescape
 from urllib.parse import parse_qs
 from urllib.parse import unquote
@@ -105,6 +107,49 @@ class CitationVerificationResult:
     valid_citations: list[dict] = field(default_factory=list)
 
 
+class CitationIntegrityError(RuntimeError):
+    """Raised when a verified report would be published without any verified citations."""
+
+    def __init__(self) -> None:
+        super().__init__("citation_integrity_lost")
+
+
+class EmptySourceRegistryReason(StrEnum):
+    """Stable classifications for research completing without sources."""
+
+    NO_SOURCES_SELECTED = "no_sources_selected"
+    NO_SOURCE_RESULTS = "no_source_results"
+    SOURCE_TOOLS_UNAVAILABLE = "source_tools_unavailable"
+
+    @property
+    def public_message(self) -> str:
+        """Return safe remediation suitable for direct display to users."""
+        if self is EmptySourceRegistryReason.NO_SOURCES_SELECTED:
+            return "No data sources are selected. Select at least one data source and run the research again."
+        if self is EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE:
+            return (
+                "The selected data source tools are currently unavailable. "
+                "Check their configuration or select different data sources and run the research again."
+            )
+        return (
+            "The selected data sources returned no results. "
+            "Try rephrasing the question or selecting different data sources."
+        )
+
+
+def classify_empty_source_registry_reason(
+    data_sources: list[str] | None,
+    available_count: int,
+    unavailable_tools: list[str],
+) -> EmptySourceRegistryReason:
+    """Classify an empty source registry without conflating selection and availability."""
+    if data_sources == []:
+        return EmptySourceRegistryReason.NO_SOURCES_SELECTED
+    if available_count == 0 and unavailable_tools:
+        return EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE
+    return EmptySourceRegistryReason.NO_SOURCE_RESULTS
+
+
 class EmptySourceRegistryError(Exception):
     """Raised when no sources were captured during research."""
 
@@ -113,16 +158,27 @@ class EmptySourceRegistryError(Exception):
         agent_type: str = "research",
         unavailable_tools: list[str] | None = None,
         available_count: int = 0,
+        reason: EmptySourceRegistryReason = EmptySourceRegistryReason.NO_SOURCE_RESULTS,
+        generated_answer: str | None = None,
     ) -> None:
         """Build the empty-registry error with agent type and tool-availability context."""
         self.agent_type = agent_type
         self.unavailable_tools = unavailable_tools or []
         self.available_count = available_count
+        self.reason = reason
+        self.public_message = reason.public_message
+        self.generated_answer = generated_answer
         super().__init__(
             f"Research failed: no sources were captured during {agent_type}. "
-            "All tool calls may have failed or returned no results. "
-            "Please try again."
+            "All tool calls may have failed or returned no results."
         )
+
+    @property
+    def public_response(self) -> str:
+        """Return the generated answer, when present, with remediation."""
+        if self.generated_answer and self.generated_answer.strip():
+            return f"{self.generated_answer.rstrip()}\n\n{self.public_message}"
+        return self.public_message
 
 
 _TRACKING_PARAMS = frozenset(
@@ -136,6 +192,49 @@ _TRACKING_PARAMS = frozenset(
         "source",
     }
 )
+
+
+# Match permissive HTTP(S) candidates, then remove only punctuation and closing
+# delimiters that are not part of the URL. In particular, a trailing ``)`` is
+# valid when it balances an earlier ``(``, as in Wikipedia article URLs.
+_HTTP_URL_CANDIDATE_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_HTTP_MARKDOWN_LINK_CANDIDATE_RE = re.compile(
+    r"^https?://[^\s<>\"']+?\]\((?P<target>https?://[^\s<>\"']+)\)[.,;]*$",
+    re.IGNORECASE,
+)
+_URL_TRAILING_PUNCTUATION = ".,;"
+_URL_CLOSING_DELIMITERS = {")": "(", "]": "[", "}": "{"}
+
+
+def clean_extracted_url(candidate: str) -> str:
+    """Remove prose wrappers from a URL without corrupting balanced delimiters."""
+    # The generic matcher starts after a Markdown link's opening bracket, so a
+    # URL label and target are captured as one candidate. Select the target only
+    # when both URLs and the closing Markdown delimiter are present; otherwise
+    # ``](`` may be literal URL content and must remain intact.
+    if markdown_link := _HTTP_MARKDOWN_LINK_CANDIDATE_RE.fullmatch(candidate):
+        candidate = markdown_link.group("target")
+    cleaned = unescape(candidate).strip().rstrip(_URL_TRAILING_PUNCTUATION)
+    while cleaned and (opener := _URL_CLOSING_DELIMITERS.get(cleaned[-1])):
+        closer = cleaned[-1]
+        if cleaned.count(closer) <= cleaned.count(opener):
+            break
+        cleaned = cleaned[:-1].rstrip(_URL_TRAILING_PUNCTUATION)
+    return cleaned
+
+
+def extract_http_urls(text: str) -> list[str]:
+    """Extract unique HTTP(S) URLs while preserving balanced URL delimiters."""
+    if not text:
+        return []
+    urls = (clean_extracted_url(match.group(0)) for match in _HTTP_URL_CANDIDATE_RE.finditer(str(text)))
+    return list(dict.fromkeys(url for url in urls if url))
+
+
+def _first_http_url(text: str) -> str | None:
+    """Return the first cleaned HTTP(S) URL in text, if present."""
+    urls = extract_http_urls(text)
+    return urls[0] if urls else None
 
 
 def _normalize_url(url: str) -> str:
@@ -261,13 +360,12 @@ class SourceRegistry:
         which one the author meant, so we reject.
         """
         if len(candidates) == 1:
-            logger.debug("[CitationVerify] %s match: '%s' → '%s'", strategy, url, candidates[0].url)
+            logger.debug("[CitationVerify] Unique %s URL match", strategy)
             return candidates[0].url
         if len(candidates) > 1:
             logger.debug(
-                "[CitationVerify] Ambiguous %s match for '%s' — %d candidates, rejecting",
+                "[CitationVerify] Ambiguous %s URL match — %d candidates, rejecting",
                 strategy,
-                url,
                 len(candidates),
             )
         return None
@@ -450,6 +548,7 @@ def extract_sources_from_tool_result(
     tool_name: str,
     content: str,
     source_id: str | None = None,
+    result_status: str | None = None,
 ) -> list[SourceEntry]:
     """Extract sources from a tool's output.
 
@@ -464,7 +563,8 @@ def extract_sources_from_tool_result(
     This means new sources (Bing, Perplexity, etc.) work automatically
     without any parser registration — as long as their output contains URLs.
 
-    The non-URL fallback is permissive on purpose: callers (the shallow and
+    A typed ``error`` result is never citable, even when its diagnostic body
+    contains URLs. The non-URL fallback is permissive on purpose: callers (the shallow and
     deep researchers) are responsible for deciding which tool calls are
     eligible to contribute sources, typically by limiting capture to the
     agent's loaded tool set. The optional ``source_id`` is stored on the
@@ -473,6 +573,12 @@ def extract_sources_from_tool_result(
     :func:`aiq_agent.common.data_source_registry.get_source_id_for_tool`,
     but it does not gate the fallback.
     """
+    # Reject provider/status payloads before running source parsers. Error
+    # responses can contain documentation or request URLs, but those URLs are
+    # diagnostics rather than evidence and must not satisfy citation checks.
+    if result_status == "error" or is_non_citable_status_output(content):
+        return []
+
     name_lower = tool_name.lower()
     for match_fn, parser_fn in _PARSER_REGISTRY:
         if match_fn(name_lower):
@@ -486,9 +592,6 @@ def extract_sources_from_tool_result(
     if entries:
         return entries
 
-    if _is_non_citable_status_output(content):
-        return []
-
     # Non-URL fallback: register the tool result itself as a source whenever
     # the tool produced non-empty output. The caller has already decided
     # this tool is eligible to contribute sources (typically by limiting
@@ -499,12 +602,44 @@ def extract_sources_from_tool_result(
     return []
 
 
-def _is_non_citable_status_output(content: str) -> bool:
+def is_non_citable_status_output(content: str) -> bool:
     """Return whether content is a tool status/error message, not evidence."""
     normalized = re.sub(r"\s+", " ", content.strip()).rstrip(".").lower()
     if not normalized:
         return False
-    if normalized.startswith("error:"):
+
+    try:
+        payload = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if isinstance(payload, (dict, list)) and not payload:
+        return True
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if error not in (None, False, "", [], {}):
+            return True
+        for key in ("status", "status_code", "statusCode", "http_status"):
+            status = payload.get(key)
+            if isinstance(status, str) and status.strip().lower() == "error":
+                return True
+            try:
+                status_code = int(status)
+            except (TypeError, ValueError):
+                continue
+            if 400 <= status_code < 600:
+                return True
+
+    if re.match(r"^error(?:\s*[:=]|\s+[45]\d{2}\b)", normalized):
+        return True
+    if re.match(
+        r"^(?:search|request|tool)\b.{0,80}\b(?:error|failed|failure)\b.{0,40}\b(?:status\s*)?[45]\d{2}\b",
+        normalized,
+    ):
+        return True
+    if normalized.startswith(("{", "[")) and re.search(
+        r"[\"']?(?:status|status[_-]?code|http[_-]?status)[\"']?\s*[:=]\s*[\"']?[45]\d{2}\b",
+        normalized,
+    ):
         return True
     return normalized == "search returned no results" or normalized.endswith(" search returned no results")
 
@@ -513,22 +648,9 @@ def _is_non_citable_status_output(content: str) -> bool:
 # Built-in parsers
 # ---------------------------------------------------------------------------
 
-# Generic URL extractor — works for any tool output format.
-# Commas are valid URL path characters (RFC 3986 sub-delim) and appear in real
-# URLs like https://weathercams.faa.gov/map/-122.31167,47.22287,10/...; we
-# include them in the match and rely on _URL_TRIM_CHARS below to strip any
-# comma that's actually sentence punctuation. ``]`` stays excluded here
-# because it almost always terminates a markdown link rather than appearing
-# in a path.
-_GENERIC_URL_RE = re.compile(r"https?://[^\s<>\"'\]]+")
-
-# Trailing characters to strip from a captured URL.  Covers sentence
-# punctuation and the closing chars of common Markdown wrappers — ``]`` for
-# ``[https://...]`` and ``>`` for ``<https://...>``.  Used at every site that
-# captures a URL via a permissive regex (registration and verification).
-_URL_TRIM_CHARS = ".,;)]>"
-
-
+# Generic URL extraction uses the shared balanced-delimiter-aware helper above.
+# Commas are valid URL path characters (RFC 3986 sub-delim), so extraction is
+# permissive and only trailing sentence punctuation is removed.
 # Patterns for extracting titles near URLs in common tool output formats
 _TITLE_NEAR_URL_PATTERNS = [
     # Tavily: <title>\nSome Title\n</title>
@@ -549,17 +671,24 @@ def _extract_title_for_url(content: str, url: str) -> str | None:
     text block.  This prevents a single block containing multiple search
     results from assigning the first result's title to every URL.
     """
+    # Connector renderers escape URL attributes. Match that exact spelling in
+    # the trusted structure while retaining the decoded URL as source identity.
+    escaped_url = escape(url, quote=True)
+
     # Find the block of text containing this URL (split by --- or double newlines)
     blocks = re.split(r"\n\n---\n\n|\n\n\n", content)
     for block in blocks:
-        if url not in block:
+        block_url = escaped_url if escaped_url in block else url
+        if block_url not in block:
             continue
-        url_pos = block.index(url)
+        url_pos = block.index(block_url)
         best_title: str | None = None
         best_distance = float("inf")
-        for pattern in _TITLE_NEAR_URL_PATTERNS:
+        for pattern_index, pattern in enumerate(_TITLE_NEAR_URL_PATTERNS):
             for title_match in pattern.finditer(block):
                 title = title_match.group(1).strip()
+                if pattern_index == 0:
+                    title = unescape(title)
                 if not title or title == url:
                     continue
                 # Prefer titles that appear before (and closest to) the URL
@@ -585,8 +714,7 @@ def _parse_generic_urls(content: str, tool_name: str) -> list[SourceEntry]:
     """
     seen: set[str] = set()
     entries: list[SourceEntry] = []
-    for match in _GENERIC_URL_RE.finditer(content):
-        url = unescape(match.group(0)).rstrip(_URL_TRIM_CHARS)
+    for url in extract_http_urls(content):
         normalized = _normalize_url(url)
         if normalized not in seen:
             seen.add(normalized)
@@ -653,8 +781,6 @@ _FOOTNOTE_REFERENCE_LINE_RE = re.compile(r"^\s*\[\^(\d+)\]:?\s*", re.MULTILINE)
 _FOOTNOTE_INLINE_CITATION_RE = re.compile(r"\[\^(\d+)\]")
 _SOURCE_LOCATION_CITATION_RE = re.compile(r"\[(\d+)\s*†[^\]]+\]")
 
-_URL_IN_LINE_RE = re.compile(r"https?://\S+")
-
 # Knowledge-layer citation pattern: "filename.ext" optionally followed by ", p.N" or ", page N"
 _KL_CITATION_PATTERN_RE = re.compile(r"^(.+\.\w{2,5})(?:,\s*(?:p\.?|page)\s*\d+)?$", re.IGNORECASE)
 
@@ -709,7 +835,7 @@ def _normalize_reference_title(text: str) -> str:
     markdown emphasis, and a trailing ``:`` separator, then lowercases and
     collapses whitespace so a writer line and its registry entry compare equal.
     """
-    cleaned = _URL_IN_LINE_RE.sub("", text)
+    cleaned = _HTTP_URL_CANDIDATE_RE.sub("", text)
     cleaned = re.sub(r"\s*\(.*?\)\s*$", "", cleaned)
     cleaned = re.sub(r"\*+", "", cleaned)
     cleaned = cleaned.strip().rstrip(":").strip()
@@ -802,7 +928,7 @@ def _reference_segment_has_target(segment: str) -> bool:
         return False
 
     ref_text = line_match.group(2).strip()
-    if _URL_IN_LINE_RE.search(ref_text):
+    if _first_http_url(ref_text):
         return True
 
     cleaned = re.sub(r"\*+", "", ref_text).strip()
@@ -869,11 +995,11 @@ def extract_source_entries_from_report(report_text: str) -> list[SourceEntry]:
     ref_section = _normalize_source_section_layout(report_text[ref_match.start() :])
     for line_match in _CITATION_LINE_RE.finditer(ref_section):
         ref_text = line_match.group(2).strip()
-        url_match = _URL_IN_LINE_RE.search(ref_text)
-        if url_match:
+        url = _first_http_url(ref_text)
+        if url:
             entries.append(
                 SourceEntry(
-                    url=url_match.group(0).rstrip(_URL_TRIM_CHARS),
+                    url=url,
                     source_type="parent_report",
                     tool_name="parent_report",
                 )
@@ -992,8 +1118,8 @@ def verify_citations(
         len(all_sources),
     )
     logger.debug(
-        "[CitationVerify] Registered URLs: %s",
-        [s.url for s in all_sources if s.url],
+        "[CitationVerify] Registry contains %d URL source(s)",
+        sum(source.url is not None for source in all_sources),
     )
 
     # Find source section
@@ -1053,19 +1179,18 @@ def verify_citations(
         full_line = line_match.group(0)
 
         # Try URL match first
-        url_match = _URL_IN_LINE_RE.search(ref_text)
-        if url_match:
-            url = url_match.group(0).rstrip(_URL_TRIM_CHARS)
+        url = _first_http_url(ref_text)
+        if url:
             canonical = registry.resolve_url(url)
             if canonical:
                 if canonical != url:
-                    logger.debug("[CitationVerify]   [%d] VALID  — %s (repaired from: %s)", num, canonical, url)
+                    logger.debug("[CitationVerify]   [%d] VALID  — repaired URL", num)
                     url_replacements[url] = canonical
                 else:
-                    logger.debug("[CitationVerify]   [%d] VALID  — %s", num, url)
+                    logger.debug("[CitationVerify]   [%d] VALID  — URL", num)
                 valid_citations.append({"number": num, "url": canonical, "citation_key": None, "line": full_line})
             else:
-                logger.info("[CitationVerify]   [%d] REMOVE — url_not_in_registry: %s", num, url)
+                logger.info("[CitationVerify]   [%d] REMOVE — url_not_in_registry", num)
                 removed_citations.append({"number": num, "line": full_line, "reason": "url_not_in_registry"})
             continue
 
@@ -1073,10 +1198,10 @@ def verify_citations(
         is_kl, citation_key = _is_knowledge_citation(ref_text, registry)
         if is_kl and citation_key:
             if registry.has_citation_key(citation_key):
-                logger.debug("[CitationVerify]   [%d] VALID  — %s", num, citation_key)
+                logger.debug("[CitationVerify]   [%d] VALID  — citation key", num)
                 valid_citations.append({"number": num, "url": None, "citation_key": citation_key, "line": full_line})
             else:
-                logger.debug("[CitationVerify]   [%d] REMOVE — citation_key_not_in_registry: %s", num, citation_key)
+                logger.debug("[CitationVerify]   [%d] REMOVE — citation_key_not_in_registry", num)
                 removed_citations.append({"number": num, "line": full_line, "reason": "citation_key_not_in_registry"})
             continue
 
@@ -1089,15 +1214,15 @@ def verify_citations(
             if canonical_url:
                 rewritten = f"[{num}] {ref_text}: {canonical_url}"
                 line_replacements[full_line] = rewritten
-                logger.info("[CitationVerify]   [%d] BACKFILL — %s", num, canonical_url)
+                logger.info("[CitationVerify]   [%d] BACKFILL — URL", num)
                 valid_citations.append({"number": num, "url": canonical_url, "citation_key": None, "line": rewritten})
             else:
-                logger.info("[CitationVerify]   [%d] BACKFILL — %s", num, citation_key)
+                logger.info("[CitationVerify]   [%d] BACKFILL — citation key", num)
                 valid_citations.append({"number": num, "url": None, "citation_key": citation_key, "line": full_line})
             continue
 
         # Neither URL nor recognizable citation key
-        logger.debug("[CitationVerify]   [%d] REMOVE — unverifiable: %s", num, ref_text[:80])
+        logger.debug("[CitationVerify]   [%d] REMOVE — unverifiable", num)
         removed_citations.append({"number": num, "line": full_line, "reason": "unverifiable"})
 
     # Dedup: collapse multiple [N] source lines that resolve to the same
@@ -1131,10 +1256,9 @@ def verify_citations(
             }
         )
         logger.debug(
-            "[CitationVerify]   [%d] REMOVE — duplicate of [%d]: %s",
+            "[CitationVerify]   [%d] REMOVE — duplicate of [%d]",
             c["number"],
             canonical_num,
-            key,
         )
     valid_citations = deduped_valid
 
@@ -1218,13 +1342,9 @@ _TRUNCATED_URL_RE = re.compile(r"\.\.\.$|…$")  # ends in ... or ellipsis
 # Suspicious URL patterns
 _IP_ADDRESS_RE = re.compile(r"^https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
 _SUSPICIOUS_SCHEMES_RE = re.compile(r"^(?:javascript|data|vbscript|file):", re.IGNORECASE)
-# See _GENERIC_URL_RE for the rationale on why ``,`` is matched and stripped
-# via _URL_TRIM_CHARS rather than excluded in the character class.
-_BARE_URL_RE = re.compile(r"https?://[^\s<>\"'\]]+")
-
 # Body URL patterns (used by sanitize_report)
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(\s*(\w+://[^\s)]+)\)")
-_BODY_URL_RE = re.compile(r"\w+://[^\s<>\"'\]]+")
+_BODY_URL_RE = re.compile(r"\w+://[^\s<>\"']+")
 
 
 @dataclass
@@ -1284,14 +1404,14 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     if ref_section:
         for m in _CITATION_LINE_RE.finditer(ref_section):
             num = int(m.group(1))
-            url_m = _BARE_URL_RE.search(m.group(2))
-            if url_m:
-                url_to_citation[_normalize_url(url_m.group(0).rstrip(_URL_TRIM_CHARS))] = num
+            url = _first_http_url(m.group(2))
+            if url:
+                url_to_citation[_normalize_url(url)] = num
 
     def _replace_body_url(match: re.Match) -> str:
         """Replace a bare body URL with its citation number, or strip it; keep artifact refs."""
         nonlocal body_urls_removed, body_urls_replaced
-        url = match.group(0).rstrip(_URL_TRIM_CHARS)
+        url = clean_extracted_url(match.group(0))
         # Preserve internal artifact references (e.g. embedded chart images). They use the
         # non-http ``artifact://`` scheme and are validated/rewritten downstream by
         # ArtifactManager.resolve_report_references, so they must survive sanitization.
@@ -1332,10 +1452,9 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
         ref_lines = ref_section.split("\n")
 
         for i, line in enumerate(ref_lines):
-            url_match = _BARE_URL_RE.search(line)
-            if not url_match:
+            url = _first_http_url(line)
+            if not url:
                 continue
-            url = url_match.group(0).rstrip(_URL_TRIM_CHARS)
 
             # Check for non-http schemes embedded in text
             if _SUSPICIOUS_SCHEMES_RE.search(line):
@@ -1357,7 +1476,7 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
                 continue
 
             # Check 3: truncated/garbled URLs — only catch obvious truncation markers
-            raw_url = url_match.group(0)
+            raw_url = next(match.group(0) for match in _HTTP_URL_CANDIDATE_RE.finditer(line))
             if _TRUNCATED_URL_RE.search(raw_url) or "…" in raw_url:
                 truncated_urls_removed.append(raw_url)
                 lines_to_remove.add(i)
@@ -1393,21 +1512,18 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
 
         if shortened_urls_removed:
             logger.debug(
-                "[ReportSanitize] Removed %d shortened URL(s) from references: %s",
+                "[ReportSanitize] Removed %d shortened URL(s) from references",
                 len(shortened_urls_removed),
-                shortened_urls_removed,
             )
         if truncated_urls_removed:
             logger.debug(
-                "[ReportSanitize] Removed %d truncated/incomplete URL(s) from references: %s",
+                "[ReportSanitize] Removed %d truncated/incomplete URL(s) from references",
                 len(truncated_urls_removed),
-                truncated_urls_removed,
             )
         if unsafe_urls_removed:
             logger.debug(
-                "[ReportSanitize] Removed %d unsafe URL(s) from references: %s",
+                "[ReportSanitize] Removed %d unsafe URL(s) from references",
                 len(unsafe_urls_removed),
-                unsafe_urls_removed,
             )
 
     # Renumber citations to close any gaps (from verify_citations and/or sanitize removals)

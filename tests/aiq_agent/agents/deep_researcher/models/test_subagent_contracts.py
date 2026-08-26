@@ -23,7 +23,9 @@ from aiq_agent.agents.deep_researcher.models import Constraint
 from aiq_agent.agents.deep_researcher.models import EvidenceJudgment
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
+from aiq_agent.agents.deep_researcher.models import ResearchQuery
 from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
+from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARCH_QUERIES
 
 
 def _answer_strategy() -> dict:
@@ -48,6 +50,19 @@ def _task_analysis() -> dict:
         "out_of_scope": ["General GPU purchasing advice"],
         "language": "English",
     }
+
+
+def _research_query(**overrides) -> dict:
+    payload = {
+        "query": "CUDA OpenCL portability",
+        "subqueries": [],
+        "preferred_tools": ["web_search_tool"],
+        "fallback_tools": [],
+        "target_components": ["programming_model"],
+        "rationale": "Supports the comparison component.",
+    }
+    payload.update(overrides)
+    return payload
 
 
 def test_research_plan_contract_validates_expected_shape():
@@ -108,6 +123,43 @@ def test_research_plan_contract_accepts_prediction_answer_type():
 
     assert plan.answer_strategy.answer_type == "prediction"
     assert plan.queries[0].preferred_tools == ["polymarket_search_tool"]
+
+
+def test_research_query_text_boundaries_are_enforced_per_nested_item():
+    """Per-item bounds prevent deeply nested plan strings from evading aggregate quotas."""
+    accepted = ResearchQuery.model_validate(
+        _research_query(
+            query="q" * 4096,
+            subqueries=["s" * 2048],
+        )
+    )
+
+    assert len(accepted.query) == 4096
+    assert len(accepted.subqueries[0]) == 2048
+
+    with pytest.raises(ValidationError):
+        ResearchQuery.model_validate(_research_query(query="q" * 4097))
+    with pytest.raises(ValidationError):
+        ResearchQuery.model_validate(_research_query(subqueries=["s" * 2049]))
+
+
+def test_research_plan_query_count_matches_shared_security_ceiling():
+    """The structured schema matches the immutable per-job query-count ceiling."""
+    base = {
+        "task_analysis": _task_analysis(),
+        "answer_strategy": _answer_strategy(),
+        "constraints": [],
+    }
+
+    accepted = ResearchPlan.model_validate(
+        {**base, "queries": [_research_query() for _ in range(DEFAULT_MAX_RESEARCH_QUERIES)]}
+    )
+
+    assert len(accepted.queries) == DEFAULT_MAX_RESEARCH_QUERIES
+    with pytest.raises(ValidationError):
+        ResearchPlan.model_validate(
+            {**base, "queries": [_research_query() for _ in range(DEFAULT_MAX_RESEARCH_QUERIES + 1)]}
+        )
 
 
 def test_reduced_answer_strategy_contract_validates():

@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from dataclasses import field
 
-# Canonical phase names produced by nat_adapter.
+# Canonical phase names produced by atof_adapter.
 PHASE_ORCHESTRATOR = "orchestrator"
 PHASE_PLANNER = "planner-agent"
 PHASE_RESEARCHER = "researcher-phase"
@@ -77,7 +77,7 @@ class RequestProfile:
     total_cache_savings_usd: float = 0.0
     total_llm_calls: int = 0
 
-    # One entry per (phase, model) pair — populated by nat_adapter
+    # One entry per (phase, model) pair — populated by atof_adapter
     phases: list[PhaseStats] = field(default_factory=list)
 
     # tool_name → invocation count

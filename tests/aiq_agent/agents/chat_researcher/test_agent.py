@@ -15,6 +15,7 @@
 
 """Tests for the ChatResearcherAgent."""
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -22,9 +23,16 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
 from aiq_agent.agents.chat_researcher.agent import ChatResearcherAgent
+from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from aiq_agent.agents.chat_researcher.models import CatalogRoutingResponse
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.common.logging_utils import log_identifier_ref
 
 
 class TestChatResearcherAgent:
@@ -189,6 +197,69 @@ class TestChatResearcherAgent:
         assert "messages" in result
 
     @pytest.mark.asyncio
+    async def test_intent_routing_failure_is_bounded(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        async def failing_router(_state):
+            raise RuntimeError("private provider detail")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=failing_router,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(
+                ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+                thread_id="test-routing-failure",
+            )
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "private provider detail" not in result["messages"][-1].content
+        assert "Intent routing failed (error_type=RuntimeError)" in caplog.text
+        assert "private provider detail" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_typed_intent_failure_terminates_without_downstream_nodes(self):
+        calls: list[str] = []
+
+        async def failed_classifier(_state):
+            return {
+                "user_intent": IntentResult(intent="meta", target="meta", raw=None),
+                "messages": [AIMessage(content="Please try again.")],
+                "workflow_outcome": WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            }
+
+        async def unexpected_downstream(*_args, **_kwargs):
+            calls.append("downstream")
+            raise AssertionError("terminal intent failure must not invoke downstream nodes")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=failed_classifier,
+            shallow_research_fn=unexpected_downstream,
+            deep_research_fn=unexpected_downstream,
+            clarifier_fn=unexpected_downstream,
+            report_ask_fn=unexpected_downstream,
+            report_edit_fn=unexpected_downstream,
+            hybrid_research_fn=unexpected_downstream,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id="test-typed-intent-failure",
+        )
+
+        assert calls == []
+        assert result["messages"][-1].content == "Please try again."
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    @pytest.mark.asyncio
     async def test_run_shallow_research_flow(
         self,
         mock_intent_classifier,
@@ -209,6 +280,132 @@ class TestChatResearcherAgent:
         result = await agent.run(state, thread_id="test-thread")
 
         assert result is not None
+        assert result.get("workflow_outcome") is None
+
+    @pytest.mark.asyncio
+    async def test_run_logs_query_metadata_without_customer_content(
+        self,
+        mock_intent_classifier,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        secret_query = "research CUDA using nvapi-vdr-fake-secret-do-not-log"  # pragma: allowlist secret
+        caplog.set_level(logging.INFO, logger="aiq_agent.agents.chat_researcher.agent")
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=mock_intent_classifier,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            enable_escalation=False,
+        )
+
+        await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content=secret_query)]),
+            thread_id="test-safe-logging",
+        )
+
+        assert secret_query not in caplog.text
+        assert "nvapi-vdr-fake-secret-do-not-log" not in caplog.text
+        assert log_content_metadata(secret_query) in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_shallow_research_failure_sets_terminal_outcome(
+        self,
+        mock_intent_classifier,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        async def shallow_boom(_state):
+            raise RuntimeError("provider detail must stay private")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=mock_intent_classifier,
+            shallow_research_fn=shallow_boom,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            enable_escalation=False,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="What is CUDA?")])
+        result = await agent.run(state, thread_id="test-shallow-fail")
+
+        assert "try again" in result["messages"][-1].content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "provider detail" not in result["workflow_outcome"].error
+
+    @pytest.mark.parametrize("depth", ["shallow", "deep"])
+    @pytest.mark.parametrize("generated_answer", [None, "Sanitized generated answer."])
+    @pytest.mark.asyncio
+    async def test_empty_source_failure_returns_generated_answer_and_typed_remediation(
+        self,
+        mock_clarifier,
+        depth,
+        generated_answer,
+    ):
+        async def orchestration(_state):
+            return {
+                "user_intent": IntentResult(intent="research", target="new_research", raw=None),
+                "depth_decision": DepthDecision(decision=depth, raw_reasoning="test"),
+            }
+
+        async def empty_sources(_state):
+            raise EmptySourceRegistryError(
+                reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
+                generated_answer=generated_answer,
+            )
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=orchestration,
+            shallow_research_fn=empty_sources,
+            deep_research_fn=empty_sources,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            enable_escalation=False,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id=f"test-empty-sources-{depth}-{generated_answer is not None}",
+        )
+
+        content = result["messages"][-1].content
+        if generated_answer:
+            assert content.startswith(f"{generated_answer}\n\n")
+        assert "No data sources are selected" in content
+        assert "Please try again" not in content
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    @pytest.mark.parametrize("depth", ["shallow", "deep"])
+    @pytest.mark.asyncio
+    async def test_unavailable_source_tools_preserve_actionable_remediation(self, mock_clarifier, depth):
+        async def orchestration(_state):
+            return {
+                "user_intent": IntentResult(intent="research", target="new_research", raw=None),
+                "depth_decision": DepthDecision(decision=depth, raw_reasoning="test"),
+            }
+
+        async def unavailable_sources(_state):
+            raise EmptySourceRegistryError(reason=EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE)
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=orchestration,
+            shallow_research_fn=unavailable_sources,
+            deep_research_fn=unavailable_sources,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            enable_escalation=False,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id=f"test-unavailable-sources-{depth}",
+        )
+
+        assert "data source tools are currently unavailable" in result["messages"][-1].content
+        assert "returned no results" not in result["messages"][-1].content
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
     @pytest.mark.asyncio
     async def test_run_deep_research_flow(
@@ -242,6 +439,121 @@ class TestChatResearcherAgent:
         result = await agent.run(state, thread_id="test-thread")
 
         assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_hybrid_target_routes_to_placeholder(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        calls = []
+
+        catalog = CatalogRoutingResponse(
+            request_id="catalog-request-1",
+            coverage=1,
+            candidates=[
+                {
+                    "label": "ColumnAttribute",
+                    "attribute": "recognized_revenue",
+                    "term": "Revenue",
+                    "id": "attr:revenue",
+                }
+            ],
+        )
+
+        async def hybrid_orchestration(_state):
+            return {
+                "user_intent": IntentResult(intent="research", target="hybrid_research"),
+                "catalog_context": catalog,
+                "catalog_request_id": catalog.request_id,
+            }
+
+        async def hybrid_placeholder(state):
+            calls.append((state.catalog_request_id, state.catalog_context))
+            return {}
+
+        async def fail_if_called(_state):
+            raise AssertionError("classic research should not run")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=hybrid_orchestration,
+            shallow_research_fn=fail_if_called,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            hybrid_research_fn=hybrid_placeholder,
+        )
+
+        await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Analyze revenue")]),
+            thread_id="test-hybrid-placeholder",
+        )
+
+        assert calls == [("catalog-request-1", catalog)]
+
+    @pytest.mark.asyncio
+    async def test_hybrid_research_failure_is_bounded(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        async def hybrid_orchestration(_state):
+            return {"user_intent": IntentResult(intent="research", target="hybrid_research")}
+
+        async def failing_hybrid_research(_state):
+            raise RuntimeError("private provider detail")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=hybrid_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            hybrid_research_fn=failing_hybrid_research,
+        )
+
+        with caplog.at_level(logging.ERROR):
+            result = await agent.run(
+                ChatResearcherState(messages=[HumanMessage(content="Analyze revenue")]),
+                thread_id="test-hybrid-failure",
+            )
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "try again" in result["messages"][-1].content.lower()
+        assert "private provider detail" not in result["messages"][-1].content
+        assert "Hybrid research failed (error_type=RuntimeError)" in caplog.text
+        assert "private provider detail" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_hybrid_research_is_bounded(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        async def hybrid_orchestration(_state):
+            return {"user_intent": IntentResult(intent="research", target="hybrid_research")}
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=hybrid_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+        )
+
+        with caplog.at_level(logging.ERROR):
+            result = await agent.run(
+                ChatResearcherState(messages=[HumanMessage(content="Analyze revenue")]),
+                thread_id="test-unconfigured-hybrid-research",
+            )
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "try again" in result["messages"][-1].content.lower()
+        assert "not configured" not in result["messages"][-1].content.lower()
+        assert "Hybrid research failed (error_type=RuntimeError)" in caplog.text
+        assert "not configured" not in caplog.text.lower()
 
     @pytest.mark.asyncio
     async def test_run_report_ask_routes_to_inline_report_answer(
@@ -430,6 +742,39 @@ class TestChatResearcherAgent:
         }
 
     @pytest.mark.asyncio
+    async def test_run_deep_research_submitter_surfaces_safe_admission_failure(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        from aiq_api.jobs.admission import JobPrincipalCapacityExceededError
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(intent="research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="Complex"),
+            }
+
+        async def reject_submit(_state):
+            raise JobPrincipalCapacityExceededError
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            deep_research_job_submitter=reject_submit,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+        result = await agent.run(state, thread_id="test-thread-admission-failure")
+
+        assert result["messages"][-1].content == JobPrincipalCapacityExceededError.public_message
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    @pytest.mark.asyncio
     async def test_deep_research_seeds_parent_report_for_inline_delta(
         self,
         mock_shallow_research,
@@ -477,6 +822,53 @@ class TestChatResearcherAgent:
         assert captured["files"].get("/shared/original_report.md") == "# FIFA World Cup 2026\n\nBody."
         assert captured["query"] == "expand the economic impact section with new 2025 data"
         assert result["last_report_markdown"] == "# Updated Report\n\nWith delta."
+
+    @pytest.mark.asyncio
+    async def test_delta_research_bypasses_clarifier(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+    ):
+        captured = {}
+
+        async def deep_orchestration(_state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research", target="new_research", use_parent_report_context=True, raw=None
+                ),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="delta"),
+            }
+
+        async def clarifier(_state):
+            raise AssertionError("report delta should not invoke the clarifier")
+
+        async def submit_deep(state):
+            captured["query"] = state.original_query
+            captured["uses_parent_report"] = state.user_intent.use_parent_report_context
+            return "delta-job"
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=clarifier,
+            enable_clarifier=True,
+            deep_research_job_submitter=submit_deep,
+        )
+        query = "update the report with Japan statistics"
+        state = ChatResearcherState(
+            messages=[
+                HumanMessage(content="write the original report"),
+                AIMessage(content="the original report"),
+                HumanMessage(content=query),
+            ],
+            active_report_job_id="parent-job",
+        )
+
+        result = await agent.run(state, thread_id="test-delta-bypass-clarifier")
+
+        assert captured == {"query": query, "uses_parent_report": True}
+        assert "delta-job" in result["messages"][-1].content
 
     @pytest.mark.asyncio
     async def test_inline_deep_research_sends_clean_query_not_report_history(
@@ -553,15 +945,18 @@ class TestChatResearcherAgent:
         content = result["messages"][-1].content
         assert content
         assert "try again" in content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "writer-agent" not in result["workflow_outcome"].error
 
     @pytest.mark.asyncio
-    async def test_report_ask_degrades_gracefully_when_hook_raises(
+    async def test_report_ask_timeout_sets_terminal_failure(
         self,
         mock_shallow_research,
         mock_deep_research,
         mock_clarifier,
+        caplog,
     ):
-        """A failing report-ask hook returns a user-facing message, not an unhandled error."""
+        """A report-ask timeout returns user-safe text and a terminal failure."""
 
         async def report_orchestration(state):
             return {
@@ -574,7 +969,7 @@ class TestChatResearcherAgent:
             }
 
         async def report_ask_raises(_state):
-            raise RuntimeError("Report follow-up requires an authenticated user")
+            raise TimeoutError
 
         agent = ChatResearcherAgent(
             intent_classifier_fn=report_orchestration,
@@ -588,11 +983,65 @@ class TestChatResearcherAgent:
             messages=[HumanMessage(content="Summarize this report")],
             active_report_job_id="job-1",
         )
-        result = await agent.run(state, thread_id="test-thread")
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(state, thread_id="test-thread")
+
+        content = result["messages"][-1].content
+        assert isinstance(content, str) and content.strip()
+        assert content == "The report service took too long to respond. Please try again."
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+        # The report job UUID is a bearer capability: only its redacted ref may be logged.
+        assert "job-1" not in caplog.text
+        assert log_identifier_ref("job-1") in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_report_ask_failure_redacts_job_uuid_in_logs(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        """A non-timeout report-ask failure degrades gracefully and never logs the raw job UUID."""
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="ask",
+                    raw=None,
+                )
+            }
+
+        async def report_ask_raises(_state):
+            raise ValueError("upstream boom")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            report_ask_fn=report_ask_raises,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Summarize this report")],
+            active_report_job_id="job-1",
+        )
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(state, thread_id="test-thread")
 
         content = result["messages"][-1].content
         assert isinstance(content, str) and content.strip()
         assert "couldn't" in content.lower() or "could not" in content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+        # The report job UUID is a bearer capability: only its redacted ref may be logged.
+        assert "job-1" not in caplog.text
+        assert log_identifier_ref("job-1") in caplog.text
 
     @pytest.mark.asyncio
     async def test_report_edit_degrades_gracefully_when_hook_raises(
@@ -600,6 +1049,7 @@ class TestChatResearcherAgent:
         mock_shallow_research,
         mock_deep_research,
         mock_clarifier,
+        caplog,
     ):
         """A failing report-edit hook returns a user-facing message, not an unhandled error."""
 
@@ -628,11 +1078,17 @@ class TestChatResearcherAgent:
             messages=[HumanMessage(content="Rewrite this report")],
             active_report_job_id="job-1",
         )
-        result = await agent.run(state, thread_id="test-thread")
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(state, thread_id="test-thread")
 
         content = result["messages"][-1].content
         assert isinstance(content, str) and content.strip()
         assert "couldn't" in content.lower() or "could not" in content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+        # The report job UUID is a bearer capability: only its redacted ref may be logged.
+        assert "job-1" not in caplog.text
+        assert log_identifier_ref("job-1") in caplog.text
 
     @pytest.mark.asyncio
     async def test_run_with_empty_messages(
@@ -778,6 +1234,45 @@ class TestChatResearcherAgent:
         await agent.run(state, thread_id="test-thread")
 
         assert captured_state["data_sources"] == []
+
+    @pytest.mark.asyncio
+    async def test_run_propagates_and_clears_database_scope(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """Each turn passes its optional database scope without retaining an earlier value."""
+        captured_scopes = []
+
+        async def capturing_intent_classifier(state):
+            captured_scopes.append(state.database_name)
+            return {
+                "user_intent": IntentResult(intent="meta", raw=None),
+                "messages": [AIMessage(content="Hello!")],
+            }
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=capturing_intent_classifier,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+        )
+        thread_id = "test-database-scope"
+
+        await agent.run(
+            ChatResearcherState(
+                messages=[HumanMessage(content="Show internal revenue")],
+                database_name="finance_prod",
+            ),
+            thread_id=thread_id,
+        )
+        await agent.run(
+            {"messages": [HumanMessage(content="Who holds this public office?")]},
+            thread_id=thread_id,
+        )
+
+        assert captured_scopes == ["finance_prod", None]
 
     @pytest.mark.asyncio
     async def test_in_session_report_routes_ask_without_job_id(

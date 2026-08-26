@@ -378,17 +378,32 @@ const patchConversationMessageById = (
   return didPatch ? { ...conversation, messages, updatedAt: new Date() } : conversation
 }
 
+/**
+ * A protected per-user source (e.g. Google Drive) must be connected before it
+ * can be part of the active selection — otherwise it appears in "Selected Data
+ * Sources" and is submitted while unusable. Mirrors the card toggle, "Enable
+ * All", and the initial-fetch gate in the layout store.
+ */
+const isSelectableDataSource = (source: {
+  per_user_auth?: { required?: boolean; status?: string | null } | null
+}): boolean => !(source.per_user_auth?.required && source.per_user_auth.status !== 'connected')
+
 const getDefaultEnabledDataSourceIds = (): string[] => {
   const layoutStore = useLayoutStore.getState()
-  return layoutStore.availableDataSources?.map((source) => source.id) ?? []
+  return (layoutStore.availableDataSources ?? []).filter(isSelectableDataSource).map((source) => source.id)
 }
 
 const restoreConversationDataSources = (conversation: Conversation): void => {
   const layoutStore = useLayoutStore.getState()
 
   if (conversation.enabledDataSourceIds) {
-    const availableIds = new Set(layoutStore.availableDataSources?.map((source) => source.id) ?? [])
-    const validIds = conversation.enabledDataSourceIds.filter((id) => availableIds.has(id))
+    // Only restore sources that are still available AND currently selectable —
+    // a protected source saved as enabled must not come back while it's not
+    // connected (e.g. an old session that had Google Drive on).
+    const selectableIds = new Set(
+      (layoutStore.availableDataSources ?? []).filter(isSelectableDataSource).map((source) => source.id)
+    )
+    const validIds = conversation.enabledDataSourceIds.filter((id) => selectableIds.has(id))
     layoutStore.setEnabledDataSources(validIds)
     return
   }
@@ -435,13 +450,17 @@ export const useChatStore = create<ChatStore>()(
         ...initialState,
 
         setCurrentUser: (userId: string | null) => {
-          const { conversations, currentConversation } = get()
+          const { conversations, currentConversation, currentUserId: previousUserId } = get()
 
           // Clear current conversation if:
           // 1. User is logging out (userId is null), OR
           // 2. User changed to a different user whose conversations don't include current one
           const shouldClearCurrent =
             currentConversation && (userId === null || currentConversation.userId !== userId)
+
+          if (userId !== previousUserId) {
+            useLayoutStore.getState().resetComposerState()
+          }
 
           // Find first conversation for new user to auto-select
           const userConversations = userId ? conversations.filter((c) => c.userId === userId) : []
@@ -737,6 +756,7 @@ export const useChatStore = create<ChatStore>()(
           metadata?: {
             enabledDataSources?: string[]
             messageFiles?: Array<{ id: string; fileName: string }>
+            selectedModel?: string
           }
         ) => {
           const { currentConversation, conversations, currentUserId } = get()
@@ -762,6 +782,7 @@ export const useChatStore = create<ChatStore>()(
             messageType: 'user',
             enabledDataSources: metadata?.enabledDataSources,
             messageFiles: metadata?.messageFiles,
+            selectedModel: metadata?.selectedModel,
           }
           // Update title on first user message (ignore file_upload_status and other system messages)
           const hasUserMessage = conversation.messages.some((m) => m.messageType === 'user')
@@ -1209,10 +1230,7 @@ export const useChatStore = create<ChatStore>()(
 
         getThinkingStepsForMessage: (userMessageId: string) => {
           const { thinkingSteps } = get()
-          // Filter out deep research steps - they're displayed in the Research Panel, not ChatThinking
-          return thinkingSteps.filter(
-            (step) => step.userMessageId === userMessageId && !step.isDeepResearch
-          )
+          return thinkingSteps.filter((step) => step.userMessageId === userMessageId)
         },
 
         appendToThinkingStep: (stepId: string, content: string) => {
@@ -1266,7 +1284,14 @@ export const useChatStore = create<ChatStore>()(
 
           // Update ephemeral store
           const updatedThinkingSteps = thinkingSteps.map((step) =>
-            step.id === stepId ? { ...step, isComplete: true } : step
+            step.id === stepId
+              ? {
+                  ...step,
+                  isComplete: true,
+                  completedAt: step.completedAt ?? new Date(),
+                  status: step.status === 'error' ? step.status : ('success' as const),
+                }
+              : step
           )
 
           // Find the userMessageId for this step to update persisted message
@@ -1280,7 +1305,14 @@ export const useChatStore = create<ChatStore>()(
                 return {
                   ...msg,
                   thinkingSteps: msg.thinkingSteps.map((s) =>
-                    s.id === stepId ? { ...s, isComplete: true } : s
+                    s.id === stepId
+                      ? {
+                          ...s,
+                          isComplete: true,
+                          completedAt: s.completedAt ?? new Date(),
+                          status: s.status === 'error' ? s.status : ('success' as const),
+                        }
+                      : s
                   ),
                 }
               }
@@ -1305,6 +1337,65 @@ export const useChatStore = create<ChatStore>()(
             },
             false,
             'completeThinkingStep'
+          )
+        },
+
+        failThinkingStep: (stepId: string) => {
+          const { currentConversation, conversations, thinkingSteps, activeThinkingStepId } = get()
+
+          const updatedThinkingSteps = thinkingSteps.map((step) =>
+            step.id === stepId
+              ? {
+                  ...step,
+                  isComplete: true,
+                  completedAt: step.completedAt ?? new Date(),
+                  status: 'error' as const,
+                }
+              : step
+          )
+
+          const step = thinkingSteps.find((s) => s.id === stepId)
+          let updatedConversation = currentConversation
+          let updatedConversations = conversations
+
+          if (step && currentConversation) {
+            const updatedMessages = currentConversation.messages.map((msg) => {
+              if (msg.id === step.userMessageId && msg.thinkingSteps) {
+                return {
+                  ...msg,
+                  thinkingSteps: msg.thinkingSteps.map((s) =>
+                    s.id === stepId
+                      ? {
+                          ...s,
+                          isComplete: true,
+                          completedAt: s.completedAt ?? new Date(),
+                          status: 'error' as const,
+                        }
+                      : s
+                  ),
+                }
+              }
+              return msg
+            })
+
+            updatedConversation = {
+              ...currentConversation,
+              messages: updatedMessages,
+              updatedAt: new Date(),
+            }
+
+            updatedConversations = updateConversationInList(conversations, updatedConversation)
+          }
+
+          set(
+            {
+              thinkingSteps: updatedThinkingSteps,
+              activeThinkingStepId: activeThinkingStepId === stepId ? null : activeThinkingStepId,
+              currentConversation: updatedConversation,
+              conversations: updatedConversations,
+            },
+            false,
+            'failThinkingStep'
           )
         },
 
@@ -2220,15 +2311,11 @@ export const useChatStore = create<ChatStore>()(
             isComplete: true,
           }))
 
-          // Stop agents (running → complete or error based on job success)
+          // A terminal job status does not prove that an individual workflow
+          // finished. Keep workflow.end authoritative for observed progress.
           const stoppedAgents = deepResearchAgents.map((agent) => ({
             ...agent,
-            status:
-              agent.status === 'running'
-                ? isSuccessfulCompletion
-                  ? ('complete' as const)
-                  : ('error' as const)
-                : agent.status,
+            status: agent.status === 'running' ? ('error' as const) : agent.status,
           }))
 
           // Stop tool calls (running → complete or error based on job success)
@@ -2898,9 +2985,9 @@ export const useChatStore = create<ChatStore>()(
           const existingIndex = deepResearchFiles.findIndex((f) => f.filename === file.filename)
 
           if (existingIndex >= 0) {
-            // Update existing file with latest content
+            // Update existing text or durable generated-artifact metadata.
             const updatedFiles = deepResearchFiles.map((f, i) =>
-              i === existingIndex ? { ...f, content: file.content, timestamp: new Date() } : f
+              i === existingIndex ? { ...f, ...file, timestamp: new Date() } : f
             )
             set({ deepResearchFiles: updatedFiles }, false, 'addDeepResearchFile:update')
             return deepResearchFiles[existingIndex].id

@@ -21,11 +21,14 @@ from langchain_core.messages import HumanMessage
 from pydantic import Field
 
 from aiq_agent.common import LLMProvider
-from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
-from aiq_agent.common import is_verbose
+from aiq_agent.common import validate_research_source_configuration
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay.bootstrap import ensure_started as _ensure_relay_started
+from aiq_agent.relay.config import RelayConfig
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -56,6 +59,10 @@ class ShallowResearchAgentConfig(FunctionBaseConfig, name="shallow_research_agen
     )
     max_llm_turns: int = Field(default=10, description="Maximum number of LLM turns")
     max_tool_iterations: int = Field(default=5, description="Maximum tool-calling iterations before forcing synthesis")
+    enforce_citations: bool = Field(
+        default=False,
+        description="Fail instead of returning a generated answer when citation integrity cannot be preserved.",
+    )
     verbose: bool = Field(default=False, description="Whether to enable verbose logging")
 
 
@@ -92,59 +99,101 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
     provider = LLMProvider()
     provider.set_default(llm)
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback()] if verbose else []
+    callbacks: list = []
 
-    agent = ShallowResearcherAgent(
-        llm_provider=provider,
-        tools=tools,
-        max_llm_turns=config.max_llm_turns,
-        max_tool_iterations=config.max_tool_iterations,
-        callbacks=callbacks,
-    )
+    # No shared agent is built here: it is (re)built per request inside _run, since
+    # the active tool set depends on the request's data_sources and the per-user MCP
+    # tools resolved at run time.
 
     async def _run(state: ShallowResearchAgentState) -> ShallowResearchAgentState:
+        from contextlib import AsyncExitStack
+
         try:
             data_sources = state.data_sources
+            validate_research_source_configuration(data_sources, "shallow research")
+
             selected_tools = filter_tools_by_sources(tools, data_sources)
-            active_agent = agent
-            if data_sources is not None and selected_tools != tools:
+
+            if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
+                logger.warning("Shallow research received data_sources with no matching tools")
+
+            # Per-user MCP tools (e.g. a connected Google Drive) are resolved at RUN
+            # time: this runs per request with Context.user_id set, so we can build the
+            # user's MCP client and add its tools to this turn. Build-time inheritance
+            # can't (the agent would be a shared, user-less instance) — see
+            # aiq_api.mcp_auth.runtime_tools. The client stays open via mcp_stack for the run.
+            async with AsyncExitStack() as mcp_stack:
+                # Per-user MCP tools require ``aiq_api`` (the API/auth layer under
+                # frontends/aiq_api), which the standalone public MCP image intentionally does
+                # not bundle — mcp/Dockerfile copies only aiq_agent, select sources, and aiq_mcp.
+                # That profile runs anonymous with no per-user OAuth, so per-user sources never
+                # apply there. Resolve the reconnect exception type up front (guarded) so the
+                # handler below can never reference an unbound name when the ``aiq_api`` import
+                # fails; a missing ``aiq_api`` is an expected skip, not a failure.
+                try:
+                    from aiq_api.mcp_auth.runtime_tools import PerUserMcpSourceUnavailableError
+                except ImportError:
+                    PerUserMcpSourceUnavailableError = None
+
+                try:
+                    from aiq_api.jobs.access import require_verified_principal
+                    from aiq_api.mcp_auth.provider import principal_user_id
+                    from aiq_api.mcp_auth.runtime_tools import open_per_user_mcp_tools
+                    from nat.builder.context import ContextState
+
+                    # Align the MCP token-lookup key with where connect stored it. The
+                    # interactive session sets Context.user_id to NAT's user id — a *different*
+                    # derivation than principal_user_id (used by connect/status). Without this,
+                    # per_user_mcp_client looks under the wrong key, finds no token, and triggers
+                    # interactive re-auth even though the source shows connected. Set with no
+                    # reset: the client reads Context.user_id at build and on each tool call, so
+                    # it must stay set for the whole turn.
+                    ContextState.get().user_id.set(principal_user_id(require_verified_principal()))
+
+                    mcp_tools = await open_per_user_mcp_tools(
+                        builder=builder, data_sources=data_sources, exit_stack=mcp_stack
+                    )
+                    if mcp_tools:
+                        selected_tools = [*selected_tools, *mcp_tools]
+                except ImportError:
+                    # Standalone MCP profile without aiq_api: expected — continue with base tools.
+                    logger.debug("aiq_api unavailable; skipping per-user MCP tools for shallow research")
+                except Exception as exc:
+                    if PerUserMcpSourceUnavailableError is not None and isinstance(
+                        exc, PerUserMcpSourceUnavailableError
+                    ):
+                        # The user explicitly selected a protected source we can't resolve
+                        # (e.g. token expired). Surface a reconnect message instead of
+                        # silently answering without it.
+                        from langchain_core.messages import AIMessage
+
+                        return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
+                    logger.error(
+                        "Failed to resolve per-user MCP tools for shallow research; continuing "
+                        "(error_type=%s detail_%s)",
+                        type(exc).__name__,
+                        log_content_metadata(exc),
+                    )
+
+                # Build the agent with this turn's tool set.
                 active_agent = ShallowResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
                     max_llm_turns=config.max_llm_turns,
                     max_tool_iterations=config.max_tool_iterations,
+                    enforce_citations=config.enforce_citations,
                     callbacks=callbacks,
                 )
 
-            if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
-                logger.warning("Shallow research received data_sources with no matching tools")
+                validate_research_source_configuration(data_sources, "shallow research", selected_tools)
 
-            # Validate tool availability before starting shallow research
-            # At least one tool must be available
-            # This prevents the agent from trying to reason about unavailable tools
-            # Check selected_tools directly - they already reflect data_sources filtering
-            from aiq_agent.common import format_user_facing_tool_error
-            from aiq_agent.common import validate_tool_availability
-
-            is_valid, _, unavailable_tools = validate_tool_availability(
-                selected_tools, research_type="shallow research"
+                return await active_agent.run(state)
+        except Exception as exc:
+            logger.error(
+                "Error in shallow research execution (error_type=%s detail_%s)",
+                type(exc).__name__,
+                log_content_metadata(exc),
             )
-
-            # Fail if no tools are available
-            if not is_valid:
-                error_msg = format_user_facing_tool_error("shallow research", unavailable_tools)
-
-                # Return error state with error message - this prevents the agent from running
-                from langchain_core.messages import AIMessage
-
-                error_state = ShallowResearchAgentState(messages=state.messages + [AIMessage(content=error_msg)])
-                return error_state
-
-            result = await active_agent.run(state)
-            return result
-        except Exception:
-            logger.exception("Error in shallow research execution.")
             raise
 
     yield FunctionInfo.from_fn(_run, description="Shallow research agent for fast, bounded research.")
@@ -160,21 +209,25 @@ class ShallowResearchWorkflowConfig(FunctionBaseConfig, name="shallow_research_w
     for the shallow_research_agent. Use this as the workflow for evaluation.
     """
 
-    pass
+    relay: RelayConfig = Field(default_factory=RelayConfig, description="NeMo Relay plugins and export destinations")
 
 
 @register_function(config_type=ShallowResearchWorkflowConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def shallow_research_workflow(config: ShallowResearchWorkflowConfig, builder: Builder):
     """Wrapper workflow that accepts string queries for evaluation."""
+    await _ensure_relay_started(config.relay)
     shallow_research_agent_fn = await builder.get_function("shallow_research_agent")
     workflow_id = config.name or config.type
 
     async def _run(query: str) -> ChatResponse:
         """Run shallow research on a query string."""
-        result = await shallow_research_agent_fn.ainvoke(
-            ShallowResearchAgentState(messages=[HumanMessage(content=query)])
-        )
-        response_content = result.messages[-1].content
+        try:
+            result = await shallow_research_agent_fn.ainvoke(
+                ShallowResearchAgentState(messages=[HumanMessage(content=query)])
+            )
+            response_content = result.messages[-1].content
+        except EmptySourceRegistryError as exc:
+            response_content = exc.public_response
         return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Shallow research workflow for evaluation (accepts string query).")

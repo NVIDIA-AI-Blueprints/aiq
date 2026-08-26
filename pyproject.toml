@@ -15,30 +15,37 @@
 
 [build-system]
 build-backend = "setuptools.build_meta"
-requires = ["setuptools >= 64", "setuptools-scm>=8"]
+requires = ["setuptools >= 83", "setuptools-scm>=8"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
-"aiq_agent.agents.deep_researcher" = ["skills/**/*"]
+"aiq_agent.agents.chat_researcher" = ["prompts/*.j2"]
+"aiq_agent.agents.clarifier" = ["prompts/*.j2"]
+"aiq_agent.agents.deep_researcher" = ["prompts/*.j2", "skills/**/*"]
+"aiq_agent.agents.report_rewriter" = ["prompts/*.j2"]
+"aiq_agent.agents.shallow_researcher" = ["prompts/*.j2"]
 
 [project]
 name = "aiq-agent"
-version = "2.0.0"
+version = "2.2.0"
 description = "NVIDIA AI-Q Blueprint - An enterprise-grade agent for intelligent research assistance"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat-core==1.7.0",
-    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.7.0",
-    "nvidia-nat-eval==1.7.0",
-    "nvidia-nat-profiler==1.7.0",
-    "deepagents>=0.6.5",
+    "nvidia-nat-core==1.8.0",
+    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.8.0",
+    "nvidia-nat-eval==1.8.0",
+    "nvidia-nat-profiler==1.8.0",
+    "nvidia-nat-redis==1.8.0",
+    "nvidia-nat-security[guardrails]==1.8.0",
+    "nemo-relay[deepagents,langchain,langgraph]>=0.8,<0.9",
+    "deepagents>=0.7.4,<0.8",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
-    "langchain-modal==0.0.5",
+    "langchain-modal==0.0.6",
     "psycopg[binary]>=3.0.0",
     "asyncpg>=0.29.0",
     "aiosqlite>=0.19.0",
@@ -46,12 +53,20 @@ dependencies = [
     "python-multipart>=0.0.27,<0.1",
     "knowledge-layer[all]",
     # CVE version floors for transitive dependencies
-    "cryptography>=46.0.6,<47",
-    "pillow>=12.2.0,<13",
+    "mcp>=1.28.1,<2",
+    "pillow>=12.3.0,<13",
+    "pyasn1>=0.6.4,<0.7",
     "pygments>=2.20.0,<3",
 ]
 
 [project.optional-dependencies]
+pii = [
+    "nvidia-nat-security[defense]==1.8.0",
+    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+]
+s3 = [
+    "boto3>=1.35.0,<2",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -77,6 +92,11 @@ viz = [
     "pygraphviz>=1.11",
 ]
 
+[tool.aiq.openshell]
+release-tag = "v0.0.88"
+adapter-version = "0.1.0"
+installer-sha256 = "c15d6cb8090e1c7c8d79a320b5bcbdaf1c15c2363942d81e84b56e03b836249e" # pragma: allowlist secret
+
 # -----------------------------------------------------------------------------
 # Workspace members are installed via: uv sync
 # Individual packages: uv pip install -e ./frontends/cli
@@ -90,12 +110,18 @@ aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
 aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
 aiq_clarifier = "aiq_agent.agents.clarifier.register"
 aiq_data_source_registry = "aiq_agent.common.data_source_registry"
+aiq_guardrails = "aiq_agent.guardrails.register"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+markers = [
+    "aws: tests that require AWS resources",
+    "integration: tests that require external services",
+    "opensearch_serverless: tests that require Amazon OpenSearch Serverless",
+]
 
 
 [tool.ruff]
@@ -144,7 +170,7 @@ extend-ignore = [
 combine-as-imports = true
 default-section = "third-party"
 force-single-line = true
-known-first-party = ["aiq", "aiq_api", "nat", "nat_*", "_utils"]
+known-first-party = ["aiq", "aiq_api", "aiq_mcp", "nat", "nat_*", "_utils"]
 known-third-party = [
   "agno",
   "autogen",
@@ -171,7 +197,8 @@ indent_dictionary_value = true
 # Auto-discovers packages in sources/ and frontends/ directories
 #
 # Usage:
-#   uv sync                              # Install root + all workspace members
+#   uv sync --group dev                 # Install AI-Q development dependencies
+#   uv sync --project mcp --extra dev   # Install the isolated MCP test environment
 #   uv sync --package aiq-agent  # Install only the root package
 #   uv pip install -e ./frontends/cli    # Install a specific package
 #   uv pip install -e "./frontends/aiq_api[postgres]"  # With extras
@@ -188,9 +215,12 @@ dev = [
     "mypy>=1.5.0",
     "dask[distributed]>=2024.1.0",
     # Workspace packages for testing
+    "aiq-gsf",
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
+    "nimble-web-search",
+    "you-com",
     "duckduckgo-news-search",
     "polymarket-prediction-market",
     "knowledge-layer[all]",
@@ -198,22 +228,25 @@ dev = [
     "aiq-research-cli",
     "aiq-debug",
 ]
-
 [tool.uv]
-prerelease = "if-necessary-or-explicit"
+prerelease = "allow"
 override-dependencies = [
     "authlib>=1.6.11,<2",
     "cryptography>=46.0.6,<47",
-    "pillow>=12.2.0,<13",
+    "mcp>=1.28.1,<2",
+    "pillow>=12.3.0,<13",
     "pygments>=2.20.0,<3",
     "pyopenssl>=26.0.0,<27",
+    "setuptools>=83.0.0",
     "tornado>=6.5.5",
     "litellm>=1.83.7,<2",
     "mako>=1.3.12,<2",
     "banks>=2.4.2,<3",
     "lxml>=6.1.0,<7",
-    "nltk>=3.9.4,<4",
-    "pyasn1>=0.6.3,<0.7",
+    "defusedxml>=0.7.1,<0.8",
+    "nltk>=3.10.0,<4",
+    "pyasn1>=0.6.4,<0.7",
+    "aiohttp>=3.14.3,<4",
 ]
 
 [tool.uv.pip]
@@ -228,15 +261,20 @@ members = [
     "frontends/benchmarks/freshqa",
     "frontends/benchmarks/deepsearch_qa",
 ]
+exclude = ["mcp"]
 
 [tool.uv.sources]
 aiq-agent = { workspace = true }
+aiq-gsf = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }
+nimble-web-search = { workspace = true }
+you-com = { workspace = true }
 duckduckgo-news-search = { workspace = true }
 polymarket-prediction-market = { workspace = true }
 knowledge-layer = { workspace = true }
+nemo-relay = { git = "https://github.com/NVIDIA/NeMo-Relay.git", rev = "ffb24817442bac99212da0971b13bdad5bc4d84d" }  # pragma: allowlist secret
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }

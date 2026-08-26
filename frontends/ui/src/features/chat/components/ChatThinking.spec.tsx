@@ -3,17 +3,16 @@
 
 import { render, screen } from '@/test-utils'
 import userEvent from '@testing-library/user-event'
-import { vi, describe, test, expect, beforeEach } from 'vitest'
-import { ChatThinking } from './ChatThinking'
+import { describe, test, expect } from 'vitest'
+import { ChatThinking, dedupeNestedToolSteps } from './ChatThinking'
 import type { ThinkingStep } from '../types'
 
-// Helper to create a thinking step
 const createStep = (overrides: Partial<ThinkingStep> = {}): ThinkingStep => ({
   id: 'step-1',
   userMessageId: 'msg-1',
   category: 'tasks',
-  functionName: 'test_function',
-  displayName: 'Test Function',
+  functionName: 'web_search_tool',
+  displayName: 'Searching the web',
   content: 'Step content here',
   isComplete: false,
   timestamp: new Date('2024-01-15T14:30:00'),
@@ -21,274 +20,316 @@ const createStep = (overrides: Partial<ThinkingStep> = {}): ThinkingStep => ({
 })
 
 describe('ChatThinking', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
   describe('empty state', () => {
-    test('renders nothing when no steps provided', () => {
+    test('renders nothing when no steps, sources, or files are provided', () => {
       render(<ChatThinking steps={[]} />)
-
-      // No status text, no toggle - component renders null
-      expect(screen.queryByText('Working on a response...')).not.toBeInTheDocument()
+      expect(screen.queryByLabelText('Working')).not.toBeInTheDocument()
       expect(screen.queryByText('Done')).not.toBeInTheDocument()
-      expect(screen.queryByText(/Show thinking/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/\bstep\b/)).not.toBeInTheDocument()
     })
   })
 
   describe('status header', () => {
-    test('shows spinner and working text when isThinking is true', () => {
-      const steps = [createStep()]
+    test('shows the working spinner and a thinking word while thinking', () => {
+      render(<ChatThinking steps={[createStep()]} isThinking />)
 
-      render(<ChatThinking steps={steps} isThinking={true} />)
-
-      expect(screen.getByLabelText('Thinking in progress')).toBeInTheDocument()
-      expect(screen.getByText('Working on a response...')).toBeInTheDocument()
+      expect(screen.getByLabelText('Working')).toBeInTheDocument()
+      expect(screen.getByText('Thinking')).toBeInTheDocument()
     })
 
-    test('shows check icon and done text when isThinking is false', () => {
-      const steps = [createStep()]
+    test('shows Done when finished', () => {
+      render(<ChatThinking steps={[createStep()]} isThinking={false} />)
 
-      render(<ChatThinking steps={steps} isThinking={false} />)
-
-      expect(screen.queryByLabelText('Thinking in progress')).not.toBeInTheDocument()
       expect(screen.getByText('Done')).toBeInTheDocument()
+      expect(screen.queryByLabelText('Working')).not.toBeInTheDocument()
     })
 
-    test('defaults to isThinking true', () => {
-      const steps = [createStep()]
-
-      render(<ChatThinking steps={steps} />)
-
-      expect(screen.getByLabelText('Thinking in progress')).toBeInTheDocument()
-      expect(screen.getByText('Working on a response...')).toBeInTheDocument()
-    })
-
-    test('shows warning icon and interrupted text when isInterrupted is true', () => {
-      const steps = [createStep()]
-
-      render(<ChatThinking steps={steps} isThinking={false} isInterrupted={true} />)
+    test('shows Interrupted when interrupted', () => {
+      render(<ChatThinking steps={[createStep()]} isThinking={false} isInterrupted />)
 
       expect(screen.getByText('Interrupted')).toBeInTheDocument()
-      // Should NOT show "Done" or spinner
       expect(screen.queryByText('Done')).not.toBeInTheDocument()
-      expect(screen.queryByLabelText('Thinking in progress')).not.toBeInTheDocument()
     })
 
-    test('isThinking takes priority over isInterrupted', () => {
-      const steps = [createStep()]
+    test('shows the waiting label when awaiting user input', () => {
+      render(<ChatThinking steps={[createStep()]} isThinking={false} isWaiting />)
 
-      // When both isThinking and isInterrupted are set, spinner should show (active thinking wins)
-      render(<ChatThinking steps={steps} isThinking={true} isInterrupted={true} />)
-
-      expect(screen.getByText('Working on a response...')).toBeInTheDocument()
-      expect(screen.queryByText('Interrupted')).not.toBeInTheDocument()
-    })
-
-    test('shows clock icon and waiting text when isWaiting is true', () => {
-      const steps = [createStep()]
-
-      render(<ChatThinking steps={steps} isThinking={false} isWaiting={true} />)
-
-      expect(screen.getByText('Waiting for response')).toBeInTheDocument()
+      expect(screen.getByText('Needs your input')).toBeInTheDocument()
       expect(screen.queryByText('Done')).not.toBeInTheDocument()
-      expect(screen.queryByText('Interrupted')).not.toBeInTheDocument()
-      expect(screen.queryByLabelText('Thinking in progress')).not.toBeInTheDocument()
     })
 
-    test('isWaiting takes priority over isInterrupted', () => {
-      const steps = [createStep()]
+    test('thinking takes priority over interrupted', () => {
+      render(<ChatThinking steps={[createStep()]} isThinking isInterrupted />)
 
-      render(<ChatThinking steps={steps} isThinking={false} isWaiting={true} isInterrupted={true} />)
-
-      expect(screen.getByText('Waiting for response')).toBeInTheDocument()
+      expect(screen.getByLabelText('Working')).toBeInTheDocument()
       expect(screen.queryByText('Interrupted')).not.toBeInTheDocument()
     })
-
-    test('isThinking takes priority over isWaiting', () => {
-      const steps = [createStep()]
-
-      render(<ChatThinking steps={steps} isThinking={true} isWaiting={true} />)
-
-      expect(screen.getByText('Working on a response...')).toBeInTheDocument()
-      expect(screen.queryByText('Waiting for response')).not.toBeInTheDocument()
-    })
   })
 
-  describe('collapse/expand toggle', () => {
-    test('shows step count in trigger', () => {
-      const steps = [createStep()]
+  describe('phase trace', () => {
+    test('shows the step count when collapsed', () => {
+      render(<ChatThinking steps={[createStep()]} isThinking={false} />)
 
-      render(<ChatThinking steps={steps} />)
-
-      expect(screen.getByText('Show thinking (1)')).toBeInTheDocument()
+      expect(screen.getByText('1 step')).toBeInTheDocument()
     })
 
-    test('step list is collapsed by default', () => {
-      const steps = [createStep({ displayName: 'Intent Classifier' })]
+    test('renders the human tool label in the trace while thinking', () => {
+      render(<ChatThinking steps={[createStep({ functionName: 'web_search_tool' })]} isThinking />)
 
-      render(<ChatThinking steps={steps} />)
-
-      // The content should be in the DOM but hidden by KUI Collapsible
-      expect(screen.getByText('Show thinking (1)')).toBeInTheDocument()
+      expect(screen.getByText('Searching the web')).toBeInTheDocument()
     })
 
-    test('expands step list on trigger click', async () => {
+    test('expands the collapsed trace on click', async () => {
       const user = userEvent.setup()
-      const steps = [createStep({ displayName: 'Intent Classifier' })]
+      render(
+        <ChatThinking steps={[createStep({ functionName: 'paper_search_tool' })]} isThinking={false} />
+      )
 
-      render(<ChatThinking steps={steps} />)
+      await user.click(screen.getByText('1 step'))
 
-      // Click the trigger area to expand
-      await user.click(screen.getByText('Show thinking (1)'))
-
-      expect(screen.getByText('Intent Classifier')).toBeVisible()
+      expect(screen.getByText('Searching papers')).toBeInTheDocument()
     })
-  })
 
-  describe('step list rendering', () => {
-    test('renders all steps as flat list with displayName', async () => {
-      const user = userEvent.setup()
+    test('folds reasoning and explanation notes into a phase instead of new rows', () => {
       const steps = [
-        createStep({ id: '1', displayName: 'Intent Classifier', category: 'agents' }),
-        createStep({ id: '2', displayName: 'Depth Router', category: 'agents' }),
-        createStep({ id: '3', displayName: 'Web Search Tool', category: 'tools' }),
-        createStep({ id: '4', displayName: 'Tavily Search', category: 'tools' }),
+        createStep({ id: 'a', functionName: 'web_search_tool', isTopLevel: true }),
+        createStep({ id: 'b', functionName: '__reasoning__', content: 'weighing the options' }),
+        createStep({ id: 'c', functionName: '__explanation__', content: 'why this matters' }),
       ]
+      render(<ChatThinking steps={steps} isThinking={false} />)
 
-      render(<ChatThinking steps={steps} />)
-
-      // Expand via trigger
-      await user.click(screen.getByText(`Show thinking (${steps.length})`))
-
-      expect(screen.getByText('Intent Classifier')).toBeVisible()
-      expect(screen.getByText('Depth Router')).toBeVisible()
-      expect(screen.getByText('Web Search Tool')).toBeVisible()
-      expect(screen.getByText('Tavily Search')).toBeVisible()
+      // Only the tool phase is counted; the folded notes are not their own steps.
+      expect(screen.getByText('1 step')).toBeInTheDocument()
     })
 
-    test('shows timestamps for each step', async () => {
-      const user = userEvent.setup()
-      const steps = [createStep({ timestamp: new Date('2024-01-15T14:30:00') })]
-
-      render(<ChatThinking steps={steps} />)
-
-      await user.click(screen.getByText(/Show thinking/))
-
-      // Timestamp should be formatted and visible
-      expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeInTheDocument()
-    })
-
-    test('renders steps from all categories in a flat list (no tabs)', async () => {
-      const user = userEvent.setup()
-      const steps = [
-        createStep({ id: '1', category: 'tasks', displayName: 'Workflow Task' }),
-        createStep({ id: '2', category: 'agents', displayName: 'Agent Step' }),
-        createStep({ id: '3', category: 'tools', displayName: 'Tool Step' }),
-      ]
-
-      render(<ChatThinking steps={steps} />)
-
-      await user.click(screen.getByText(/Show thinking/))
-
-      // All three categories appear in a single flat list
-      expect(screen.getByText('Workflow Task')).toBeVisible()
-      expect(screen.getByText('Agent Step')).toBeVisible()
-      expect(screen.getByText('Tool Step')).toBeVisible()
-    })
-
-    test('step list has correct ARIA role', async () => {
-      const user = userEvent.setup()
-      const steps = [createStep()]
-
-      render(<ChatThinking steps={steps} />)
-
-      await user.click(screen.getByText(/Show thinking/))
-
-      expect(screen.getByRole('list', { name: 'Thinking steps' })).toBeInTheDocument()
-    })
-  })
-
-  describe('styling', () => {
-    test('outer container has base border class', () => {
-      const steps = [createStep()]
-
-      render(<ChatThinking steps={steps} />)
-
-      // The trigger lives inside the outer container with the base border
-      const triggerText = screen.getByText(/Show thinking/)
-      const outerDiv = triggerText.closest('.border-base')
-      expect(outerDiv).toBeInTheDocument()
-    })
-  })
-
-  describe('data sources summary', () => {
-    test('data sources are visible without expanding the collapsible', () => {
-      const steps = [createStep()]
-      const enabledDataSources = ['web_search', 'knowledge_base']
-
-      render(<ChatThinking steps={steps} enabledDataSources={enabledDataSources} />)
-
-      expect(screen.getByText('Selected Data Sources:')).toBeVisible()
-      expect(screen.getByText('Web Search, Knowledge Base')).toBeVisible()
-    })
-
-    test('displays files when provided', () => {
-      const steps = [createStep()]
-      const messageFiles = [
-        { id: 'file-1', fileName: 'document.pdf' },
-        { id: 'file-2', fileName: 'report.docx' },
-      ]
-
-      render(<ChatThinking steps={steps} messageFiles={messageFiles} />)
-
-      expect(screen.getByText('Selected Data Sources:')).toBeVisible()
-      expect(screen.getByText('document.pdf, report.docx')).toBeVisible()
-    })
-
-    test('displays both data sources and files', () => {
-      const steps = [createStep()]
-      const enabledDataSources = ['web_search']
-      const messageFiles = [{ id: 'file-1', fileName: 'document.pdf' }]
-
+    test('renders nothing for a reflection-only stream (it produces no phases)', () => {
       render(
         <ChatThinking
-          steps={steps}
-          enabledDataSources={enabledDataSources}
-          messageFiles={messageFiles}
+          steps={[createStep({ id: 'r', functionName: '__reflection__', content: 'looks good' })]}
+          isThinking={false}
         />
       )
 
-      expect(screen.getByText('Selected Data Sources:')).toBeVisible()
-      expect(screen.getByText('Web Search')).toBeVisible()
-      expect(screen.getByText('document.pdf')).toBeVisible()
+      expect(screen.queryByText('Done')).not.toBeInTheDocument()
+      expect(screen.queryByText(/\bstep\b/)).not.toBeInTheDocument()
+    })
+  })
+
+  describe('response duration', () => {
+    test('a restored interrupted turn shows the real elapsed from the last step, not a mount-relative value', () => {
+      const started = new Date('2024-01-15T14:30:00')
+      const step = createStep({
+        functionName: 'web_search_tool',
+        timestamp: started,
+        completedAt: new Date('2024-01-15T14:30:05'),
+      })
+
+      render(
+        <ChatThinking
+          steps={[step]}
+          isThinking={false}
+          isInterrupted
+          responseStartedAt={started}
+        />
+      )
+
+      const duration = screen.getByLabelText('Total response time')
+      expect(duration).toHaveTextContent('0:05')
+      expect(duration.textContent).not.toMatch(/\d+:\d\d:\d\d/)
     })
 
-    test('excludes knowledge_layer from data sources display', () => {
-      const steps = [createStep()]
-      const enabledDataSources = ['web_search', 'knowledge_layer']
+    test('a multi-minute deep-research job shows the real duration from the terminal timestamp', () => {
+      const started = new Date('2024-01-15T14:30:00')
+      const step = createStep({
+        functionName: 'web_search_tool',
+        timestamp: started,
+        completedAt: new Date('2024-01-15T14:30:02'),
+      })
 
-      render(<ChatThinking steps={steps} enabledDataSources={enabledDataSources} />)
+      render(
+        <ChatThinking
+          steps={[step]}
+          isThinking={false}
+          responseStartedAt={started}
+          responseCompletedAt={new Date('2024-01-15T14:35:00')}
+        />
+      )
 
-      expect(screen.getByText('Web Search')).toBeVisible()
-      expect(screen.queryByText(/Knowledge Layer/i)).not.toBeInTheDocument()
+      const duration = screen.getByLabelText('Total response time')
+      expect(duration).toHaveTextContent('5:00')
+      expect(duration.textContent).not.toBe('0:02')
     })
 
-    test('does not show data sources section when no sources or files', () => {
-      const steps = [createStep()]
+    test('a still-running job shows no bogus completed duration', () => {
+      const started = new Date('2024-01-15T14:30:00')
+      const step = createStep({
+        functionName: 'web_search_tool',
+        timestamp: started,
+        completedAt: new Date('2024-01-15T14:30:02'),
+      })
 
-      render(<ChatThinking steps={steps} />)
+      render(
+        <ChatThinking
+          steps={[step]}
+          isThinking
+          responseStartedAt={started}
+        />
+      )
 
-      expect(screen.queryByText('Selected Data Sources')).not.toBeInTheDocument()
+      const duration = screen.getByLabelText('Total response time')
+      expect(duration.textContent).not.toBe('0:02')
+      expect(duration.textContent).toMatch(/\d+:\d\d:\d\d/)
+    })
+  })
+
+  describe('dedupeNestedToolSteps', () => {
+    test('keeps a distinct nested call to the same tool as a top-level call', () => {
+      const out = dedupeNestedToolSteps([
+        createStep({ id: 'top', functionName: 'web_search_tool', argSummary: 'cats', isTopLevel: true }),
+        createStep({ id: 'nested', functionName: 'web_search_tool', argSummary: 'dogs', isTopLevel: false }),
+      ])
+
+      expect(out.map((s) => s.id).sort()).toEqual(['nested', 'top'])
     })
 
-    test('formats data source names correctly', () => {
-      const steps = [createStep()]
-      const enabledDataSources = ['web_search', 'onedrive', 'google_drive']
+    test('drops a nested announcement that duplicates a top-level call by label and input', () => {
+      const out = dedupeNestedToolSteps([
+        createStep({ id: 'top', functionName: 'web_search_tool', argSummary: 'cats', isTopLevel: true }),
+        createStep({ id: 'nested', functionName: 'web_search_tool', argSummary: 'cats', isTopLevel: false }),
+      ])
 
-      render(<ChatThinking steps={steps} enabledDataSources={enabledDataSources} />)
+      expect(out.map((s) => s.id)).toEqual(['top'])
+    })
 
-      expect(screen.getByText('Web Search, Onedrive, Google Drive')).toBeVisible()
+    test('lifts a nested input summary onto a top-level call that carries none', () => {
+      const out = dedupeNestedToolSteps([
+        createStep({ id: 'top', functionName: 'web_search_tool', argSummary: undefined, isTopLevel: true }),
+        createStep({ id: 'nested', functionName: 'web_search_tool', argSummary: 'cats', isTopLevel: false }),
+      ])
+
+      expect(out).toHaveLength(1)
+      expect(out[0].id).toBe('top')
+      expect(out[0].argSummary).toBe('cats')
+    })
+  })
+
+  describe('step body comes from argSummary', () => {
+    const PRIOR_ASSISTANT_ANSWER =
+      'A gene is a segment of DNA that codes for a protein, while a genome is the complete set of genetic material.'
+
+    test('renders a prior-answer body when a step still carries it as its arg summary (root cause)', () => {
+      render(
+        <ChatThinking
+          steps={[
+            createStep({ functionName: 'intent_classifier', argSummary: PRIOR_ASSISTANT_ANSWER, isTopLevel: true }),
+          ]}
+          embedded
+        />
+      )
+
+      expect(screen.getByText('Intent Classifier')).toBeInTheDocument()
+      expect(screen.getByText(PRIOR_ASSISTANT_ANSWER)).toBeInTheDocument()
+    })
+
+    test('a non-folded step with no arg summary shows its label but no history body', () => {
+      render(
+        <ChatThinking
+          steps={[createStep({ functionName: 'intent_classifier', argSummary: undefined, isTopLevel: true })]}
+          embedded
+        />
+      )
+
+      expect(screen.getByText('Intent Classifier')).toBeInTheDocument()
+      expect(screen.queryByText(PRIOR_ASSISTANT_ANSWER)).not.toBeInTheDocument()
+    })
+
+    test('a tool step still shows its query as the body', () => {
+      render(
+        <ChatThinking
+          steps={[
+            createStep({ functionName: 'web_search_tool', argSummary: 'top customers by revenue', isTopLevel: true }),
+          ]}
+          embedded
+        />
+      )
+
+      expect(screen.getByText('Searching the web')).toBeInTheDocument()
+      expect(screen.getByText('top customers by revenue')).toBeInTheDocument()
+    })
+  })
+
+  describe('used sources and files', () => {
+    test('surfaces a Using chip for a source the answer actually used', () => {
+      render(
+        <ChatThinking
+          steps={[createStep({ functionName: 'web_search_tool' })]}
+          isThinking={false}
+          enabledDataSources={['web_search']}
+        />
+      )
+
+      expect(screen.getByText('Using')).toBeInTheDocument()
+      expect(screen.getByText('Web Search')).toBeInTheDocument()
+    })
+
+    test('does not surface an enabled source that no tool call used', () => {
+      render(
+        <ChatThinking
+          steps={[createStep({ functionName: 'web_search_tool' })]}
+          isThinking={false}
+          enabledDataSources={['web_search', 'confluence']}
+        />
+      )
+
+      expect(screen.getByText('Web Search')).toBeInTheDocument()
+      expect(screen.queryByText('Confluence')).not.toBeInTheDocument()
+    })
+
+    test('surfaces an arbitrary user-configured source dynamically (not a fixed web/knowledge map)', () => {
+      render(
+        <ChatThinking
+          steps={[createStep({ functionName: 'confluence_search' })]}
+          isThinking={false}
+          enabledDataSources={['confluence', 'web_search']}
+        />
+      )
+
+      expect(screen.getByText('Confluence')).toBeInTheDocument()
+      expect(screen.queryByText('Web Search')).not.toBeInTheDocument()
+    })
+
+    test('resolves a function-group tool to its source via a shared token', () => {
+      render(
+        <ChatThinking
+          steps={[createStep({ functionName: 'eci__gdrive_get_file' })]}
+          isThinking={false}
+          enabledDataSources={['gdrive']}
+        />
+      )
+
+      expect(screen.getByText('Google Drive')).toBeInTheDocument()
+    })
+
+    test('shows message files as source chips', () => {
+      render(
+        <ChatThinking
+          steps={[createStep()]}
+          isThinking={false}
+          messageFiles={[{ id: 'f1', fileName: 'document.pdf' }]}
+        />
+      )
+
+      expect(screen.getByText('document.pdf')).toBeInTheDocument()
+    })
+  })
+
+  describe('embedded variant', () => {
+    test('renders only the trace spine, without the chat header', () => {
+      render(<ChatThinking steps={[createStep({ functionName: 'web_search_tool' })]} embedded />)
+
+      expect(screen.getByText('Searching the web')).toBeInTheDocument()
+      expect(screen.queryByText('Thinking')).not.toBeInTheDocument()
+      expect(screen.queryByText('Done')).not.toBeInTheDocument()
     })
   })
 })

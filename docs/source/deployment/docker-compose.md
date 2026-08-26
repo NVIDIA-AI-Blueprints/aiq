@@ -44,6 +44,7 @@ The sections below explain each group of variables.
 | `NVIDIA_API_KEY` | Yes | NVIDIA API key for NIM model access. |
 | `TAVILY_API_KEY` | Conditional | Web search provider key (required if using `tavily_web_search`). |
 | `EXA_API_KEY` | Conditional | Web search provider key (required if using `exa_web_search`). |
+| `NIMBLE_API_KEY` | Conditional | Web search provider key (required if using `nimble_web_search`). |
 | `SERPER_API_KEY` | No | Google Scholar paper search key (optional). |
 
 ### API keys (optional)
@@ -100,11 +101,70 @@ AIQ_CHECKPOINT_DB=/app/data/checkpoints.db
 
 When using SQLite, you can optionally remove the `depends_on` block for the `aiq-agent` service since the `postgres` container is no longer needed.
 
+### Artifact Storage
+
+Artifact metadata always uses the job database. Artifact bytes use SQL BLOB storage
+by default. The Compose stack does not provision an AWS S3 bucket; create the bucket
+externally, then set:
+
+```bash
+AIQ_ARTIFACT_BLOB_PROVIDER=s3
+AIQ_ARTIFACT_S3_BUCKET=YOUR_BUCKET_NAME
+AIQ_ARTIFACT_S3_REGION=us-west-2
+AIQ_ARTIFACT_S3_PREFIX=artifacts/v1
+```
+
+The checked-in Compose stack also does not deploy MinIO. To run a local MinIO server
+with Docker:
+
+```bash
+export MINIO_CONTAINER=aiq-minio
+export MINIO_ROOT_USER=YOUR_ACCESS_KEY
+export MINIO_ROOT_PASSWORD=YOUR_SECRET_KEY
+export AIQ_ARTIFACT_S3_BUCKET=YOUR_BUCKET_NAME
+
+docker pull minio/minio
+docker run --detach --name "$MINIO_CONTAINER" \
+  --publish 9000:9000 --publish 9001:9001 \
+  --env MINIO_ROOT_USER --env MINIO_ROOT_PASSWORD \
+  --volume aiq-minio-data:/data \
+  minio/minio server /data --console-address ":9001"
+```
+
+Open the MinIO console at `http://localhost:9001` and create the bucket named by
+`AIQ_ARTIFACT_S3_BUCKET`. Then add the same bucket and credentials to `deploy/.env`.
+With Docker Desktop, the backend container reaches the host through
+`host.docker.internal`:
+
+```bash
+AIQ_ARTIFACT_BLOB_PROVIDER=s3
+AIQ_ARTIFACT_S3_BUCKET=YOUR_BUCKET_NAME
+AIQ_ARTIFACT_S3_ENDPOINT_URL=http://host.docker.internal:9000
+AWS_ACCESS_KEY_ID=YOUR_ACCESS_KEY
+AWS_SECRET_ACCESS_KEY=YOUR_SECRET_KEY
+```
+
+For another environment, replace the endpoint with an address reachable from the
+`aiq-agent` container.
+
+The bucket is required when the provider is `s3`. Endpoint, region, and prefix are
+optional; leave the endpoint unset for AWS S3, and the prefix defaults to
+`artifacts/v1`. Configure credentials through workload identity, deployment secrets, or
+the standard AWS credential chain. When the provider is `s3`, artifact bytes are stored
+in the configured bucket and SQL stores artifact metadata only.
+
+The access-key example above is for local MinIO development only. For production,
+use workload identity or a short-lived role, restrict bucket access to the AI-Q worker
+identity and configured prefix, enable Block Public Access and TLS-only access, and
+enable storage-layer encryption such as SSE-KMS. AI-Q API ownership checks do not
+protect direct bucket access, and AI-Q does not application-encrypt artifact blob bytes.
+See [Production Considerations](./production.md#s3-security-responsibility).
+
 ### Frontend Runtime Settings
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `backend_url` | `http://aiq-agent:8000` | Backend API URL as seen from the frontend container. |
+| `BACKEND_URL` | `http://aiq-agent:8000` | Backend API URL as seen from the frontend container. |
 
 ### Dask Worker Settings
 
@@ -145,16 +205,16 @@ docker login nvcr.io
 
 # Run with pre-built images (no --build flag)
 cd deploy/compose
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.0.0 \
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.0.0 \
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0 \
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0 \
 docker compose --env-file ../.env -f docker-compose.yaml up -d
 ```
 
 You can also add the image variables to `deploy/.env` instead of passing them on the command line:
 
 ```bash
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.0.0
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.0.0
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0
 ```
 
 ### Release Build

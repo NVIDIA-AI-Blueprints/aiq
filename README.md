@@ -24,6 +24,7 @@ limitations under the License.
 
 ## Table of Contents
 - [Overview](#overview)
+- [What's New](#whats-new)
 - [Software Components](#software-components)
 - [Target Audience](#target-audience)
 - [Prerequisites](#prerequisites)
@@ -38,6 +39,7 @@ limitations under the License.
   - [Command-line interface (CLI)](#command-line-interface-cli)
   - [Web UI](#web-ui)
   - [Async Deep Research Jobs](#async-deep-research-jobs)
+  - [MCP Server](#mcp-server)
   - [Benchmarks](#benchmarks)
   - [Jupyter Notebooks](#jupyter-notebooks)
 - [Evaluating the Workflow](#evaluating-the-workflow)
@@ -50,7 +52,7 @@ limitations under the License.
 
 ## Overview
 
-The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and uses [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview). It gives you both **quick, cited answers** and **in-depth, report-style research** in one system, with benchmarks and evaluation harnesses so you can measure quality and improve over time.
+The NVIDIA AI-Q Blueprint is a deployable research backend built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview). Teams can self-host the application boundary and connect deployment-owned models, data sources, authentication, policy controls, storage, and observability. It provides both **quick, cited answers** and **in-depth, report-style research**, plus benchmarks and evaluation harnesses for measuring quality. AI-Q is focused on governed research workflows; it is not a general-purpose coding-agent harness.
 
 <p align="center">
 <img src="./docs/assets/AIQ-arch-light.png" alt="AI-Q Architecture" width="800">
@@ -60,33 +62,78 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 
 - **Orchestration node** — One node classifies intent (meta vs. research), produces meta responses (for example, greetings, capabilities), and sets research depth (shallow vs. deep).
 - **Shallow research** — Bounded, faster researcher with tool-calling and source citation.
-- **Deep research** — Long-running multi-step planning and research to generate a long-form citation-backed report.
+- **Structured deep research** — Advisory source routing, structured planning, concurrent researcher workers, bounded source-tool batching, and a dedicated writer produce citation-backed reports and other requested output shapes.
+- **Report follow-up** — Ask questions about a completed report, create a child-job cosmetic rewrite, or run delta research with the parent report as context.
 - **Workflow configuration** — YAML configs define agents, tools, LLMs, and routing behavior so you can tune workflows without code changes.
 - **Modular workflows** — All agents (orchestration node, shallow researcher, deep researcher, clarifier) are composable; each can run standalone or as part of the full pipeline.
-- **Skills and sandbox execution** — Deep research can load built-in DeepAgents skills, including the `data-table-analysis` workflow, and run code-oriented work in a job-scoped Modal sandbox.
-- **Portable agent skill** — AI-Q ships `skills/aiq-research/` so compatible coding harnesses can call a local AI-Q server for routed chat and async deep research jobs.
+- **Skills, sandbox execution, and durable outputs** — Built-in research/synthesis skills are exposed as host-side, read-only definitions. Skills that invoke code use a provider-neutral sandbox contract; Modal and OpenShell create one physical sandbox per deep-research job. Opt-in rich-file capture checkpoints manifest-declared files after successful sandbox commands, finalizes on success/failure, stores bytes in SQL or S3-compatible storage, and delivers metadata to the Files tab live and on replay.
+- **Portable Agent Skills** — `aiq-deploy` selects, starts, and validates an AI-Q deployment; `aiq-research` calls routed chat and async research from compatible coding harnesses.
 - **Data source registry** — UI toggles and request payloads can select web, paper, enterprise, collaboration, and knowledge-layer sources per message.
-- **Production API and auth** — REST endpoints, async job ownership, token validator entry points, and provider lifecycle hooks support authenticated deployments.
-- **Profiling and cost analysis** — Tokenomics reports combine NAT profiler traces with pricing configuration for cost, latency, and cache analysis.
+- **Expanded sources** — Paper search supports Serper, SerpAPI, and SearchAPI; You.com adds web, contents, general-research, and finance-research tools; Nimble adds configurable web search; focused profiles demonstrate DuckDuckGo news, Polymarket, OpenSearch, and Azure AI Search knowledge retrieval.
+- **Production API and auth** — REST endpoints, async job ownership, per-user OAuth-protected MCP sources, token validator entry points, and provider lifecycle hooks support authenticated deployments; a separate public MCP server exposes stateless research tools for trusted networks.
+- **Opt-in policy controls** — NeMo Guardrails middleware covers selected workflow and agent boundaries, and narrow application-level encryption can protect final async output plus selected artifact-event content.
+- **Observability, profiling, and cost analysis** — NeMo Relay preserves task, named-agent, LLM, and tool hierarchy across interactive turns and async researchers. ATOF feeds local debugging and tokenomics reports; OTEL exports traces to external observability backends.
 - **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
 - **Frontend options** — Run through CLI, web UI, or async jobs. Refer to [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
-- **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as [helm deployment](deploy/helm/deployment-k8s/).
+- **Deployment options** - Deployment assets for [Docker Compose](deploy/compose/) and [Helm](deploy/helm/deployment-k8s/); the repository source chart honors the Helm release namespace for every namespaced resource.
+
+## What's New
+
+Recent changes include:
+
+- **Structured, concurrent deep research** — Advisory source routing, structured planning,
+  concurrent researcher workers, bounded source-tool batching, and a dedicated writer replace
+  the earlier three-role flow and move plan ownership out of the clarifier.
+- **Work that continues from a completed report** — Users can ask questions against an existing
+  report, create child-job rewrites, or run delta research with the parent report as context.
+- **Portable skills, sandboxes, and durable files** — Provider-neutral sandbox execution,
+  the new `aiq-deploy` skill, expanded `aiq-research` workflows, opt-in artifact capture, SQL or
+  S3-compatible storage, and live or replayed Files-tab access turn generated files into durable
+  outputs.
+- **Sources, integrations, and policy controls** — OpenSearch and Azure AI Search join the knowledge backends;
+  You.com adds four search and research tools, Nimble adds configurable web search, and the standalone public MCP server exposes submit/poll/report operations; per-user MCP
+  OAuth, opt-in NeMo Guardrails middleware, and narrowly scoped async-content encryption add
+  deployment controls without making them universal defaults.
+- **Operations and user experience** — Async traces preserve the agent hierarchy, the source Helm
+  chart honors the selected release namespace, and the UI improves concurrent-research activity,
+  session recovery, and WebSocket reliability.
+
+AI-Q v2.2.0 is published on NVIDIA NGC as the
+[`aiq-agent` backend container](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-agent/2.2.0),
+[`aiq-frontend` web container](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-frontend/2.2.0),
+and [`aiq2-web` Helm chart](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/helm-charts/aiq2-web/2.2.0).
+Each artifact uses version `2.2.0`.
+
+See the [changelog](CHANGELOG.md) for detailed release history; the linked feature docs describe
+configuration and current limitations.
 
 
 ## Software Components
 
-The following are used by this project in the default configuration:
+The checked-in default CLI and web profiles use these core components:
 
-- [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
-- [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents, researcher)
-- [NVIDIA nemotron-3-super-120b-a12b](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) (optional, compatible but Build API has limited availability due to high demand)
-- [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (intent classifier)
-- [GPT-OSS-120B](https://build.nvidia.com/openai/gpt-oss-120b/modelcard) (agents)
-- [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NVIDIA llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
-- [NVIDIA nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
+- [NVIDIA NeMo Agent Toolkit 1.8.0](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
+- [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.6.5 or newer
+- NVIDIA Nemotron 3.5 Lightning for intent classification and shallow research in the default profiles
+- [NVIDIA Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) for clarification and every deep-research role
+- [Google Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) (document summary, if used)
+- [NVIDIA Nemotron 3 Embed 1B](https://build.nvidia.com/nvidia/nemotron-3-embed-1b) (embedding model for the knowledge layer, if used)
+- [NVIDIA Nemotron 3 Nano Omni 30B A3B Reasoning](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) (vision-language model for the LlamaIndex knowledge layer, if used)
 - [Tavily Search API](https://tavily.com/) for web search
-- [Serper Search API](https://serper.dev/) for paper search (Google Scholar)
+- Serper, SerpAPI, or SearchAPI for Google Scholar paper search
+
+> **Known hosted-serving limitation:** Nemotron 3.5 Lightning can intermittently produce citation-incomplete or
+> malformed shallow drafts when served through NVIDIA API Catalog. AI-Q fails closed instead of publishing those
+> drafts. The Brev getting-started launchable uses Nemotron Ultra for shallow research; the general-purpose shipped
+> profiles retain Lightning. See [Troubleshooting](docs/source/resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog)
+> for details and the self-hosted Lightning option.
+
+The shipped frontier profile, `configs/config_frontier_models.yml`, uses GPT-5.6 Luna for intent classification,
+shallow research, source routing, and deep-research execution, with GPT-5.6 Sol for clarification, orchestration,
+planning, and writing. Treat any bring-your-own model or modified profile as an experimental customization until the
+complete workflow is evaluated with that exact model, prompt, hyperparameter, tool-calling, and structured-output
+configuration. Refer to
+[Configuration Files](#configuration-files); there is no single all-features profile.
 
 ## Target Audience
 
@@ -105,10 +152,10 @@ This project is for:
 
 
 **Optional requirements:**
-- Tavily API key (for web search functionality)
-- Serper API key (for academic paper search functionality)
+- A web-search API key for the configured provider: Tavily, Exa, Nimble, or You.com
+- A paper search API key for one of the supported providers: Serper (`SERPER_API_KEY`), SerpAPI (`SERPAPI_API_KEY`), or SearchAPI (`SEARCHAPI_API_KEY`)
 
-> **Note:** Configure at least one data source (Tavily web search, Serper search tool, or knowledge layer) to enable research functionality.
+> **Note:** Configure at least one data source (web search, paper search, or knowledge layer) to enable research functionality.
 
 If these optional API keys are not provided, the agent continues to operate without the corresponding search capabilities. Refer to [Obtain API Keys](#obtain-api-keys) for details.
 
@@ -118,12 +165,11 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 
 | Component | Default Model | Self-Hosted Hardware Reference |
 |-----------|---------------|-------------------------------|
-| LLM (research subagent) | `nvidia/nemotron-3-nano-30b-a3b` (default) or `nvidia/nemotron-3-super-120b-a12b` (optional) | [Nemotron 3 Nano support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-nano), [Nemotron 3 Super support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-super-120b-a12b) |
-| LLM (intent classifier) | `nvidia/nemotron-3-nano-30b-a3b` | [Nemotron 3 Nano support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-nano) |
-| LLM (deep research orchestrator, planner) | `openai/gpt-oss-120b` | [GPT OSS support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#gpt-oss-120b) |
-| Document summary (optional) | `nvidia/nemotron-mini-4b-instruct` | [Nemotron Mini 4B](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/) |
-| Text embedding | `nvidia/llama-nemotron-embed-vl-1b-v2` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
-| VLM (image/chart extraction, optional) | `nvidia/nemotron-nano-12b-v2-vl` | [Vision language model support matrix](https://docs.nvidia.com/nim/vision-language-models/latest/support-matrix.html#nemotron-nano-12b-v2-vl) |
+| LLM (intent classifier, shallow researcher) | `nvidia/nemotron-3.5-lightning-30b-a3b` | [Nemotron 3.5 Lightning](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
+| LLM (clarifier and all deep-research roles) | `nvidia/nemotron-3-ultra-550b-a55b` | [Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
+| Document summary (optional) | `google/gemma-4-31b-it` | [Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) |
+| Text embedding | `nvidia/nemotron-3-embed-1b` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
+| VLM (image/chart extraction, optional) | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | [Nemotron 3 Nano Omni](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 | Knowledge layer (Foundational RAG, optional) | -- | [RAG Blueprint support matrix](https://docs.nvidia.com/rag/latest/support-matrix.html) |
 
 For detailed installation instructions, refer to [Installation -- Hardware Requirements](docs/source/get-started/installation.md#hardware-requirements).
@@ -181,7 +227,10 @@ uv pip install -e ./frontends/benchmarks/freshqa
 
 # Install data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
+uv pip install -e ./sources/exa_web_search
 uv pip install -e ./sources/google_scholar_paper_search
+uv pip install -e ./sources/nimble_web_search
+uv pip install -e ./sources/you_com
 uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 ```
 
@@ -192,7 +241,10 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 | ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
 | NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
 | Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
-| Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
+| Exa        | `EXA_API_KEY`        | Web search                | No (required only when Exa search is configured)            |
+| Nimble     | `NIMBLE_API_KEY`     | Configurable web search   | No (required only when Nimble search is configured)         |
+| You.com    | `YDC_API_KEY`        | Web, contents, and research APIs | No (required only when You.com tools are configured)   |
+| Paper search | `SERPER_API_KEY`, `SERPAPI_API_KEY`, or `SEARCHAPI_API_KEY` | Academic paper search | No (choose one matching the configured provider) |
 
 
 #### Obtain an NVIDIA API Key
@@ -206,10 +258,31 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 2. Navigate to your dashboard
 3. Generate an API key
 
-#### Obtain a Serper API Key
+#### Obtain an Exa API Key
 
-1. Sign in to [Serper](https://serper.dev/)
-2. Generate an API key from your dashboard
+1. Sign in to [Exa](https://exa.ai/)
+2. Create an API key from the dashboard
+3. Add it to `deploy/.env` as `EXA_API_KEY`
+
+Refer to the `exa_web_search` section in the
+[Configuration Reference](docs/source/customization/configuration-reference.md) for workflow usage.
+
+#### Obtain a You.com API Key
+
+Follow the [You.com quickstart](https://you.com/docs/quickstart) to create an API key and add it to `deploy/.env` as
+`YDC_API_KEY`. Refer to [You.com API Suite](docs/source/customization/you-com.md) for tool configuration.
+
+#### Obtain a Paper Search API Key
+
+Paper search supports three interchangeable providers. Set the `provider` field on the `paper_search` function in your workflow config (defaults to `serper`):
+
+| Provider | Environment Variable | Sign-up |
+|----------|----------------------|---------|
+| Serper (default) | `SERPER_API_KEY` | [serper.dev](https://serper.dev/) |
+| SerpAPI | `SERPAPI_API_KEY` | [serpapi.com](https://serpapi.com/) |
+| SearchAPI | `SEARCHAPI_API_KEY` | [searchapi.io](https://www.searchapi.io/) |
+
+Refer to [sources/google_scholar_paper_search/README.md](sources/google_scholar_paper_search/README.md) for configuration details.
 
 ### Set Up Environment Variables
 
@@ -229,10 +302,17 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 
 | Config | Models | Description |
 |--------|--------|-------------|
-| `config_cli_default.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B | CLI default. Web search; optional paper search (requires `SERPER_API_KEY`); no knowledge retrieval. Nemotron Super is commented out but can be enabled for higher quality. |
-| `config_web_default_llamaindex.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron Mini 4B | Web default. LlamaIndex knowledge retrieval; web search; optional paper search (requires `SERPER_API_KEY`). Nemotron Super is commented out but can be enabled for higher quality. |
-| `config_web_frag.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B | Web + Foundational RAG (external RAG server). Helm default. See [RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag/tree/main) for an example RAG deployment. Nemotron Super is commented out but can be enabled for higher quality. |
-| `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. LlamaIndex; web search; optional paper search (requires `SERPER_API_KEY`). Requires `OPENAI_API_KEY`. Nemotron Super is commented out but can be enabled for higher quality. |
+| `config_cli_default.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | CLI chat pipeline with Tavily and clarification; no knowledge backend. Paper search is a commented opt-in. |
+| `config_web_default_llamaindex.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Gemma 4 summary | Default web/API chat pipeline with LlamaIndex/ChromaDB and Tavily. Paper search is commented out. |
+| `config_web_frag.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | Web/API and Helm base with Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. |
+| `config_web_opensearch.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Nemotron 3 Embed | Web/API with built-in OpenSearch knowledge retrieval plus Tavily; supports self-hosted, `es`, and `aoss` authentication modes. |
+| `config_web_azure_ai_search.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Nemotron 3 Embed | Web/API with Azure AI Search knowledge retrieval plus Tavily; supports API-key and Azure identity authentication. |
+| `config_frontier_models.yml` | GPT Sol/Luna; Gemma 4 summary | LlamaIndex frontier profile using GPT Luna for intent, shallow research, source routing, and research, with GPT Sol for clarification, orchestration, planning, and writing. Requires `OPENAI_API_KEY`, `NVIDIA_API_KEY`, and `TAVILY_API_KEY` for the enabled Tavily tools. |
+| `config_web_default_guardrails.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Gemma 4 summary | LlamaIndex profile with workflow Guardrails explicitly attached, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
+| `config_web_frag_mcp_auth.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
+| `config_domain_routing_and_skills.yml` | Nemotron 3 Ultra; Gemma 4 summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
+| `config_openshell.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Gemma 4 summary | Experimental web/API skills profile with artifact capture, fail-closed policy attestation, and one OpenShell sandbox per deep-research job. |
+| `config_mcp.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Ways to Run the Agents
 
@@ -291,7 +371,34 @@ For more details, refer to:
 
 ### Async Deep Research Jobs
 
-Endpoints, SSE streaming, and debug console: refer to [frontends/aiq_api/README.md](frontends/aiq_api/README.md).
+For public endpoints, SSE replay, report follow-up, and durable artifact access, refer to the
+[REST API documentation](docs/source/integration/rest-api.md).
+
+### MCP Server
+
+Expose AI-Q to MCP clients through the standalone, stateless Streamable HTTP server:
+
+```bash
+: "${NVIDIA_API_KEY:?Set NVIDIA_API_KEY}"
+: "${TAVILY_API_KEY:?Set TAVILY_API_KEY}"
+uv sync --project mcp --frozen
+AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs \
+  uv run --project mcp --frozen aiq-mcp-server
+```
+
+The endpoint defaults to `http://localhost:9001/mcp` and advertises exactly `submit_query`, `poll_query`, and
+`get_final_report`. This public server intentionally has no authentication; job UUIDs are bearer capabilities and
+the endpoint must not be exposed directly to an untrusted network. See [Expose AI-Q as an MCP Server](docs/source/integration/mcp-server.md)
+for the exact JSON protocol, health contracts, security model, and container deployment.
+
+MCP is an independent uv project with its own `mcp/uv.lock`. The root lock remains compatible with NAT's
+`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==50.0.0` as a
+security hardening measure. The release-supported platform is Linux x86_64 with CPython 3.13, through either the
+frozen source project or the release container. Other 64-bit source hosts are development-only; x86_64 macOS and
+32-bit Windows are unsupported because `cryptography` 50 does not publish those wheels. Run the release container
+on a supported 64-bit Linux/container host. The MCP package's local path dependency closure is not published as a
+standalone wheel. See the
+[MCP security policy](mcp/SECURITY.md#platform-compatibility) for the full platform contract.
 
 ### Benchmarks
 
@@ -353,8 +460,7 @@ If your config enables Phoenix tracing, start the Phoenix server before running 
 Start server (separate terminal):
 
 ```bash
-source .venv/bin/activate
-phoenix serve
+uvx --from arize-phoenix phoenix serve
 ```
 
 For detailed benchmark documentation, refer to:
@@ -372,21 +478,26 @@ For development, contribution, and documentation, refer to:
 - **[Knowledge Layer Setup](sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)**: RAG backends and document ingestion
 - **[Agent Skills](docs/source/integration/agent-skills.md)**: Install the portable AI-Q research skill in compatible coding harnesses
 - **[Skills and Sandbox Example](docs/source/examples/skills-sandbox/index.md)**: Run deep research with built-in skills and Modal sandbox execution
-- **[Profiling and Cost Analysis](docs/source/profiling/index.md)**: Generate tokenomics and latency reports from NAT profiler traces
+- **[Profiling and Cost Analysis](docs/source/profiling/index.md)**: Generate tokenomics and latency reports from Relay ATOF traces
 - **[Docs index](docs/README.md)**: Full documentation list and component docs
 - **[Changelog](docs/source/resources/changelog.md)**: Version history and changes
 
 ## Roadmap
 
-- [ ] **[NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) Integration:** Enhance safety and security guardrails.
+The checkboxes below track implementation in the current branch; a checked item does not by itself
+indicate availability in a published release.
+
+- [x] **[NeMo Guardrails](docs/source/customization/guardrails.md) Integration:** Opt-in middleware for selected workflow, shallow-researcher, and deep-researcher boundaries.
 - [ ] **[NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) Integration:** Reduce latency via priority scheduling at scale.
-- [ ] **MCP Authentication:** Implement secure login/auth for MCP connections.
-- [x] **Skills & Sandboxing:** Support built-in deep research skills with job-scoped sandbox execution.
+- [x] **Per-user MCP OAuth:** Connect each signed-in user to protected MCP data sources through the UI.
+- [x] **Skills & Sandboxing:** Support host-side, role-assigned deep-research skills and provider-neutral execution. Modal and OpenShell create one physical sandbox per deep-research job.
+- [x] **Report Follow-up and Rewriting:** Answer against a completed report, submit cosmetic child rewrites, and run delta research with parent-report context.
+- [x] **Durable Sandbox Artifacts:** Opt-in manifest checkpoints after successful sandbox commands, terminal harvesting on success/failure, SQL or S3-compatible byte storage, and live/replayed Files-tab access.
 - [ ] **Custom Skill Management:** Add UI and lifecycle controls for user-provided skill bundles.
 - [ ] **Dynamic Model Routing:** Allow sub-agents to automatically select the optimal model per task.
 - [ ] **Resource Management:** Implement configurable token caps and tool-call budgets.
-- [ ] **Expanded Web Search:** Additional integration examples including Perplexity and You.com.
-- [ ] **Collaborative Rewriting:** Additional report rewriting agent and HITL Q&A.
+- [x] **Expanded Web Search:** Tavily, Exa, You.com, and Nimble integrations with configurable source selection.
+- [ ] **Additional Search Providers:** Add integration examples including Perplexity.
 - [ ] **Multimedia Output:** Embed audio, video, and images directly into reports.
 - [ ] **Voice-to-Text Input:** Integrate [NVIDIA Riva](https://developer.nvidia.com/riva) for hands-free accessibility.
 
@@ -394,13 +505,14 @@ For development, contribution, and documentation, refer to:
 
 - The AI-Q Blueprint is shared as a reference and is provided "as is". The security in the production environment is the responsibility of the end users deploying it. When deploying in a production environment, please have security experts review any potential risks and threats; define the trust boundaries, implement logging and monitoring capabilities, secure the communication channels, integrate AuthN & AuthZ with appropriate access controls, keep the deployment up to date, ensure the containers/source code are secure and free of known vulnerabilities.
 - A robust frontend that handles AuthN & AuthZ is highly recommended. Missing AuthN & AuthZ will result in ungated access to customer models if directly exposed e.g. the internet, resulting in either cost to the customer, resource exhaustion, or denial of service.
-- End users are encouraged to add [NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) and additional prompt content filtering to the blueprint. Guardrails will be native in upcoming release.
+- AI-Q includes opt-in [NeMo Guardrails middleware](docs/source/customization/guardrails.md) for selected workflow and agent boundaries. Guardrails are not enabled universally; operators must attach and test the policies required for their deployment.
+- Optional [async job content encryption](docs/source/deployment/content-encryption.md) protects final job output and selected artifact-event content only. It is off by default and is not full database-level job-content encryption.
 - The AI-Q Blueprint doesn't require any privileged access to the system.
-- Deep research skills can invoke sandboxed code execution for analysis workflows. Keep sandbox credentials, quotas, lifecycle cleanup, and network policy aligned with your deployment's trust boundaries.
+- Deep research skills can invoke sandboxed code execution for analysis workflows. Keep sandbox credentials, quotas, lifecycle cleanup, attestation, and network policy aligned with your deployment's trust boundaries. Shared OpenShell attachment is an explicit debug-only mode and is not job-isolated.
 - End users are responsible for ensuring the availability of their deployment.
 - End users are responsible for building, and patching, the container images to keep them up to date.
 - The end users are responsible for ensuring that OSS packages used by the developer blueprint are current.
-- The logs from middleware, backend, and demo app are printed to standard out. They can include input prompts and output completions for development purposes. The end users are advised to handle logging securely and avoid information leakage for production use cases.
+- The built-in workflow and agent logger paths redact raw prompts, tool payloads, and model completions. Enabled source adapters, external middleware, model and tool providers, tracing exporters, and reverse proxies can have separate request-logging and retention behavior; audit and configure every enabled component independently, and keep production logs access-controlled.
 
 
 ## License

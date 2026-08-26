@@ -17,6 +17,10 @@
 
 from __future__ import annotations
 
+import logging
+from contextlib import nullcontext
+from threading import Event
+from threading import Thread
 from typing import Any
 from unittest.mock import MagicMock
 from unittest.mock import patch
@@ -32,6 +36,7 @@ from aiq_agent.agents.deep_researcher.deepagents_runtime import SHARED_ROUTE
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepAgentsRuntime
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
+from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
 from aiq_agent.agents.deep_researcher.deepagents_runtime import discover_skill_collections
 from aiq_agent.agents.deep_researcher.deepagents_runtime import resolve_skill_collections
 
@@ -46,6 +51,7 @@ class TestSkillCollections:
 
         assert collections["research"] == "/skills/research/"
         assert collections["synthesis"] == "/skills/synthesis/"
+        assert collections["visualization"] == "/skills/visualization/"
 
     def test_nested_skill_collections_are_discovered(self, tmp_path) -> None:
         skill_dir = tmp_path / "finance" / "earnings" / "quarterly-summary"
@@ -87,6 +93,17 @@ class TestDeepAgentsRuntimeRouting:
         assert set(backend.routes) == {BUILTIN_SKILL_SOURCE}
         assert isinstance(backend.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
         assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
+
+    def test_agent_has_chart_skill_tracks_visualization_collection(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=DeepResearchSkillsConfig(
+                agents={"writer-agent": ("visualization",), "researcher-agent": ("synthesis",)},
+            ),
+        )
+
+        assert runtime.agent_has_chart_skill("writer-agent") is True
+        assert runtime.agent_has_chart_skill("researcher-agent") is False
+        assert runtime.agent_has_chart_skill("planner-agent") is False
 
     def test_sandbox_only_adds_shared_route(self) -> None:
         fake_sandbox = MagicMock()
@@ -301,3 +318,211 @@ class TestDeepAgentsRuntimeJobId:
             pytest.raises(ImportError, match="langchain-modal"),
         ):
             _ = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig(provider="modal")).backend
+
+    def test_public_openshell_config_maps_isolation_and_attestation(self) -> None:
+        public = DeepResearchSandboxConfig(
+            policy="policy.yaml",
+            openshell_image="aiq:test",
+            workspace="research",
+            attest=True,
+            expected_policy_version=3,
+            policy_load_timeout_seconds=17,
+            network="allowlist",
+            network_allow=("api.github.com",),
+        )
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.sandbox.create_sandbox_backend",
+            return_value="backend",
+        ) as create:
+            assert _create_sandbox_backend(public, "job-1") == "backend"
+
+        resolved = create.call_args.args[0]
+        assert resolved.network.mode == "allowlist"
+        assert resolved.network.allow == ("api.github.com",)
+        assert resolved.providers.openshell.image == "aiq:test"
+        assert resolved.providers.openshell.workspace == "research"
+        assert resolved.providers.openshell.attest is True
+        assert resolved.providers.openshell.expected_policy_version == 3
+        assert resolved.providers.openshell.policy_load_timeout_seconds == 17
+        assert resolved.providers.openshell.delete_on_exit is True
+
+    def test_public_allowlist_requires_hosts(self) -> None:
+        with pytest.raises(ValueError, match="network_allow"):
+            DeepResearchSandboxConfig(network="allowlist")
+
+    @pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
+    def test_public_ready_timeout_must_be_positive_and_finite(self, timeout: float) -> None:
+        with pytest.raises(ValueError, match="ready_timeout_seconds"):
+            DeepResearchSandboxConfig(ready_timeout_seconds=timeout)
+
+
+class TestDeepAgentsRuntimeArtifacts:
+    """Terminal artifact harvesting is safe on normal and interrupted paths."""
+
+    def test_final_harvest_logs_only_exception_type(self, caplog: pytest.LogCaptureFixture) -> None:
+        provider = MagicMock()
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=provider,
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+        runtime.artifact_manager = MagicMock()
+        runtime.artifact_manager.final_harvest.side_effect = RuntimeError("credential=do-not-log")
+
+        with caplog.at_level(logging.WARNING):
+            runtime.final_harvest()
+
+        assert "RuntimeError" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
+    def test_normal_finalize_artifacts_harvests(self) -> None:
+        provider = MagicMock()
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=provider,
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+        runtime.artifact_manager = MagicMock()
+
+        assert runtime.finalize_artifacts(interrupted=False) is True
+        assert runtime.finalize_artifacts(interrupted=False) is False
+        runtime.artifact_manager.final_harvest.assert_called_once_with()
+
+    @pytest.mark.parametrize(("lease_acquired", "expected"), [(True, True), (False, False)])
+    def test_interrupted_finalize_harvests_only_when_provider_is_idle(
+        self,
+        lease_acquired: bool,
+        expected: bool,
+    ) -> None:
+        provider = MagicMock()
+        provider.try_operation_lease.return_value = nullcontext(lease_acquired)
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=provider,
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+        runtime.artifact_manager = MagicMock()
+
+        assert runtime.finalize_artifacts(interrupted=True) is expected
+        assert runtime.artifact_manager.final_harvest.call_count == int(lease_acquired)
+
+
+class TestDeepAgentsRuntimeCleanup:
+    """Terminal cleanup is idempotent and reports the provider's actual outcome."""
+
+    def test_finalize_closes_once_and_emits_success(self) -> None:
+        provider = MagicMock()
+        provider.provider_name = "openshell"
+        provider.physical_sandbox_name = "sandbox-1"
+        provider.cleanup_succeeded = True
+        events: list[dict[str, object]] = []
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=provider,
+        ):
+            runtime = DeepAgentsRuntime(
+                sandbox=DeepResearchSandboxConfig(),
+                artifact_emit=events.append,
+            )
+
+        assert runtime.finalize(interrupted=False) is True
+        assert runtime.finalize(interrupted=False) is True
+        provider.close.assert_called_once_with()
+        assert provider.terminate.call_count == 0
+        assert [event["data"]["status"] for event in events] == ["started", "succeeded"]  # type: ignore[index]
+
+    def test_finalize_without_provider_emits_no_cleanup_events(self) -> None:
+        events: list[dict[str, object]] = []
+        runtime = DeepAgentsRuntime(sandbox=None, artifact_emit=events.append)
+
+        assert runtime.finalize(interrupted=False) is True
+        assert runtime.finalize(interrupted=True) is True
+        assert events == []
+
+    def test_finalize_emits_failed_when_provider_observed_cleanup_error(self) -> None:
+        provider = MagicMock()
+        provider.provider_name = "openshell"
+        provider.sandbox_name = "logical-job"
+        provider.physical_sandbox_name = None
+        provider.cleanup_succeeded = False
+        events: list[dict[str, object]] = []
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=provider,
+        ):
+            runtime = DeepAgentsRuntime(
+                sandbox=DeepResearchSandboxConfig(),
+                artifact_emit=events.append,
+            )
+
+        assert runtime.finalize(interrupted=True) is False
+        provider.terminate.assert_called_once_with()
+        assert [event["data"]["status"] for event in events] == ["started", "failed"]  # type: ignore[index]
+
+    def test_finalize_logs_only_cleanup_exception_type(self, caplog: pytest.LogCaptureFixture) -> None:
+        provider = MagicMock()
+        provider.provider_name = "openshell"
+        provider.physical_sandbox_name = "sandbox-1"
+        provider.close.side_effect = RuntimeError("credential=do-not-log")
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=provider,
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+
+        with caplog.at_level(logging.WARNING):
+            assert runtime.finalize(interrupted=False) is False
+
+        assert "RuntimeError" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
+    def test_concurrent_finalize_waits_for_and_reuses_exact_result(self) -> None:
+        provider = MagicMock()
+        provider.provider_name = "openshell"
+        provider.physical_sandbox_name = "sandbox-1"
+        provider.cleanup_succeeded = True
+        cleanup_started = Event()
+        allow_cleanup = Event()
+        second_caller_started = Event()
+        events: list[dict[str, object]] = []
+        results: list[bool] = []
+
+        def close() -> None:
+            cleanup_started.set()
+            if not allow_cleanup.wait(timeout=2):
+                raise AssertionError("cleanup was not released")
+            provider.cleanup_succeeded = False
+
+        provider.close.side_effect = close
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=provider,
+        ):
+            runtime = DeepAgentsRuntime(
+                sandbox=DeepResearchSandboxConfig(),
+                artifact_emit=events.append,
+            )
+
+        first = Thread(target=lambda: results.append(runtime.finalize(interrupted=False)))
+
+        def finalize_again() -> None:
+            second_caller_started.set()
+            results.append(runtime.finalize(interrupted=True))
+
+        second = Thread(target=finalize_again)
+        first.start()
+        assert cleanup_started.wait(timeout=2)
+        second.start()
+        assert second_caller_started.wait(timeout=2)
+        assert results == []
+
+        allow_cleanup.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert results == [False, False]
+        provider.close.assert_called_once_with()
+        provider.terminate.assert_not_called()
+        assert [event["data"]["status"] for event in events] == ["started", "failed"]  # type: ignore[index]

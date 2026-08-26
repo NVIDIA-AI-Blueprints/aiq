@@ -11,7 +11,7 @@ AI-Q includes portable Agent Skills for coding harnesses that support skill-styl
 
 AI-Q ships two distinct skill sets, separated by audience. This page documents
 the **API-consumer** skills. The maintainer skills are documented in their own
-[README](../../../.agents/skills/README.md).
+[README](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/.agents/skills/README.md).
 
 | | API-consumer skills | Maintainer skills |
 | :-- | :-- | :-- |
@@ -66,6 +66,24 @@ For local non-container use, the deploy skill should prefer the backend-only Age
 
 This starts the AI-Q API backend required by `aiq-research` without starting the browser UI.
 
+## Report Follow-Up and Portable Outputs
+
+The `aiq-research` helper exposes the completed-report and durable-artifact operations as
+public commands:
+
+```bash
+python3 $SKILL_DIR/scripts/aiq.py report_edit <JOB_ID> "<EDIT_INSTRUCTIONS>"
+python3 $SKILL_DIR/scripts/aiq.py report <JOB_ID> --out-dir ./my-report
+python3 $SKILL_DIR/scripts/aiq.py artifacts <JOB_ID> --download-dir ./aiq-artifacts
+```
+
+`report_edit` submits a child job for a cosmetic rewrite and polls it to completion; the
+parent report remains unchanged. `report --out-dir` writes `report.md` plus an `artifacts/`
+directory, downloads the job's durable artifacts, and rewrites embedded `artifact://`
+image references to local files. `artifacts --download-dir` downloads the artifacts into
+the requested directory and prints their local paths; omit `--download-dir` to list the
+artifact metadata without downloading bytes.
+
 ## Example Invocations
 
 After the skills are installed, users can ask their coding harness for AI-Q actions in natural language. Research-shaped prompts route to `aiq-research`; install, deploy, run, stop, UI, CLI, Docker, Helm, and troubleshooting prompts route to `aiq-deploy`:
@@ -86,7 +104,7 @@ After the skills are installed, users can ask their coding harness for AI-Q acti
 
 ## Prerequisites
 
-- Python 3.10 or newer.
+- Python 3.11, 3.12, or 3.13.
 - For `aiq-deploy`: access to this repository or permission to clone `https://github.com/NVIDIA-AI-Blueprints/aiq`, plus the selected runtime such as Docker Compose, Node/npm for local web mode, or kubectl/Helm for Kubernetes mode.
 - For `aiq-research`: a local or self-hosted AI-Q Blueprint server, usually at `http://localhost:8000`. Set `AIQ_SERVER_URL` only when using a different local or self-hosted server URL.
 
@@ -124,7 +142,7 @@ ln -s ../../skills/aiq-research .claude/skills/aiq-research
 ```
 
 The maintainer-skill symlinks are managed alongside the maintainer skill set;
-see the [maintainer skills README](../../../.agents/skills/README.md) for how
+refer to the [maintainer skills README](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/.agents/skills/README.md) for how
 those are added.
 
 For a user-level install:
@@ -179,11 +197,18 @@ From the parent directory containing the installed skills, run:
 ```bash
 test -f aiq-deploy/SKILL.md
 test -d aiq-deploy/references
-python3 aiq-research/scripts/aiq.py
+python3 aiq-research/scripts/aiq.py --help
 ```
 
-Expected `aiq-research/scripts/aiq.py` output starts with:
+The help check does not require a running backend and must exit successfully. Expected output starts with:
 
 ```text
 Usage: aiq.py <command> [args]
+```
+
+With an AI-Q backend running, verify the public consumer boundary before invoking research:
+
+```bash
+python3 aiq-research/scripts/aiq.py health
+python3 aiq-research/scripts/aiq.py agents
 ```

@@ -40,6 +40,7 @@ scoped to the package you are touching.
 | `configs/` | Workflow YAML configs (e.g. `config_cli_default.yml`) |
 | `frontends/ui/` | Next.js / React / TypeScript / Tailwind / KUI web UI |
 | `frontends/benchmarks/` | Eval harnesses: `freshqa`, `deepsearch_qa`, `deepresearch_bench` |
+| `mcp/` | Independent MCP server uv project, lockfile, tests, and release assets |
 | `deploy/` | Docker Compose and Helm/Kubernetes assets; `deploy/.env` for secrets |
 | `docs/source/` | Sphinx documentation |
 | `skills/` | API-consumer Agent Skills (`aiq-deploy`, `aiq-research`) |
@@ -51,10 +52,13 @@ scoped to the package you are touching.
 Python (run from the repo root; the project uses `uv`):
 
 ```bash
-./scripts/setup.sh                 # one-time environment setup
-uv run ruff check .                # lint
-uv run ruff format --check .       # format check
-uv run pytest                      # tests
+./scripts/setup.sh                    # one-time environment setup
+uv sync --group dev                   # root AI-Q development environment
+uv run ruff check .                   # lint
+uv run ruff format --check .          # format check
+uv run pytest                         # root and source-package tests
+uv sync --project mcp --extra dev     # isolated MCP development environment
+uv run --project mcp --extra dev pytest mcp/tests
 ```
 
 Run the backend locally:
@@ -98,6 +102,15 @@ change crosses shared boundaries.
   them.
 - `pre-commit` enforces the above plus secret detection, link checking, and
   skill validation. Install it and let it run before pushing.
+- The root workspace excludes `mcp/`; maintain `uv.lock` and `mcp/uv.lock` as
+  separate resolutions. The root uses the NAT-compatible
+  `cryptography>=46.0.6,<47` range, while the frozen MCP release profile pins
+  `cryptography==50.0.0`. Keep the 50.x override scoped to `mcp/`: it is uv
+  lock policy and is not guaranteed by the published wheel metadata. The
+  audited MCP profile is Linux x86_64 with CPython 3.13; other 64-bit source
+  hosts are development-only. x86_64 macOS and 32-bit Windows are unsupported
+  because `cryptography` 50 does not publish those wheels; run the release
+  container on a supported 64-bit Linux/container host.
 
 ## Security and auth rules
 

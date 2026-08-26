@@ -39,6 +39,20 @@ from .schema import RetrievalResult
 logger = logging.getLogger(__name__)
 
 
+class IngestionBatchTooLargeError(RuntimeError):
+    """Raised when one ingestion batch exceeds the backend's admission limit."""
+
+    def __init__(self) -> None:
+        super().__init__("Upload batch exceeds the configured ingestion capacity")
+
+
+class IngestionCapacityError(RuntimeError):
+    """Raised when temporary backend load prevents immediate ingestion admission."""
+
+    def __init__(self) -> None:
+        super().__init__("Document ingestion is temporarily at capacity; retry later")
+
+
 class TTLCleanupMixin:
     """
     Mixin that provides TTL-based collection cleanup.

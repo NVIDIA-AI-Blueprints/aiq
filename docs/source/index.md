@@ -5,7 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # NVIDIA AI-Q Blueprint
 
-An NVIDIA blueprint for AI-powered deep research, built on the NeMo Agent Toolkit. AI-Q combines intelligent query routing, multi-agent research pipelines, and pluggable knowledge retrieval to deliver comprehensive, citation-backed answers.
+An NVIDIA blueprint for AI-powered deep research, built on the NeMo Agent Toolkit. AI-Q is a deployable research
+backend that teams can self-host and connect to deployment-owned models, data, authentication, policy controls,
+storage, and observability. It combines intelligent query routing, multi-agent research pipelines, and pluggable
+knowledge retrieval to deliver citation-backed answers. It is focused on governed research workflows rather than
+general-purpose coding-agent execution.
 
 ## Where to Start
 
@@ -13,6 +17,7 @@ An NVIDIA blueprint for AI-powered deep research, built on the NeMo Agent Toolki
 
 | I want to... | Go to |
 |--------------|-------|
+| Review recent changes | [Changelog](./resources/changelog.md) |
 | Read the docs in order | [Developer Guide](./get-started/developer-guide.md) |
 | Run the blueprint quickly | [Quick Start](./get-started/quick-start.md) |
 | Understand how it works | [Architecture Overview](./architecture/overview.md) |
@@ -50,7 +55,9 @@ Overview <./customization/index.md>
 Configuration Reference <./customization/configuration-reference.md>
 Swapping Models <./customization/swapping-models.md>
 Tools and Sources <./customization/tools-and-sources.md>
+You.com API Suite <./customization/you-com.md>
 MCP Tools <./customization/mcp-tools.md>
+Guardrails <./customization/guardrails.md>
 Knowledge Layer <./customization/knowledge-layer.md>
 Prompts <./customization/prompts.md>
 Human-in-the-Loop <./customization/hitl.md>
@@ -72,6 +79,7 @@ Adding a Data Source <./extending/adding-a-data-source.md>
 Overview <./integration/index.md>
 Agent Skills <./integration/agent-skills.md>
 REST API <./integration/rest-api.md>
+MCP Server <./integration/mcp-server.md>
 ```
 
 ```{toctree}
@@ -97,9 +105,12 @@ Overview <./deployment/index.md>
 Docker Compose <./deployment/docker-compose.md>
 Docker Build System <./deployment/docker-build.md>
 Authentication <./deployment/authentication.md>
+Async Job Content Encryption <./deployment/content-encryption.md>
 Observability <./deployment/observability.md>
 Production <./deployment/production.md>
+OpenShell <./deployment/openshell.md>
 Kubernetes <./deployment/kubernetes.md>
+Amazon OpenSearch Serverless <./deployment/aws-opensearch-serverless.md>
 ```
 
 ```{toctree}
@@ -138,6 +149,7 @@ FAQ <./resources/faq.md>
 ./examples/minimal-shallow-only.md
 ./examples/full-pipeline-llamaindex.md
 ./examples/full-pipeline-web.md
+./examples/azure-ai-search.md
 ./examples/cli-with-local-nims.md
 ./examples/hybrid-frontier-model.md
 ./examples/skills-sandbox/index.md

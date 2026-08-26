@@ -12,4 +12,4 @@ export {
   replaceArtifactImages,
   extractArtifactIds,
   rewriteArtifactRefs,
-} from './artifact-url'
+} from '@/shared/utils/artifact-url'

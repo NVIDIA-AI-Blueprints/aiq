@@ -15,6 +15,7 @@
 
 """Collection management endpoints."""
 
+import asyncio
 import logging
 
 from fastapi import APIRouter
@@ -54,7 +55,8 @@ def add_collection_routes(router: APIRouter):
     ) -> CollectionInfo:
         """Create a new collection for storing documents."""
         try:
-            return ingestor.create_collection(
+            return await asyncio.to_thread(
+                ingestor.create_collection,
                 name=request.name,
                 description=request.description,
                 metadata=request.metadata,
@@ -74,7 +76,7 @@ def add_collection_routes(router: APIRouter):
     ) -> list[CollectionInfo]:
         """List all available collections."""
         try:
-            return ingestor.list_collections()
+            return await asyncio.to_thread(ingestor.list_collections)
         except Exception as e:
             logger.error(f"Failed to list collections: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -90,7 +92,7 @@ def add_collection_routes(router: APIRouter):
         ingestor: BaseIngestor = Depends(_require_ingestor),
     ) -> CollectionInfo:
         """Get details for a specific collection."""
-        collection = ingestor.get_collection(name)
+        collection = await asyncio.to_thread(ingestor.get_collection, name)
         if collection is None:
             raise HTTPException(status_code=404, detail=f"Collection '{name}' not found")
         return collection
@@ -106,7 +108,7 @@ def add_collection_routes(router: APIRouter):
     ) -> dict:
         """Delete a collection and all its contents."""
         try:
-            success = ingestor.delete_collection(name)
+            success = await asyncio.to_thread(ingestor.delete_collection, name)
             if not success:
                 raise HTTPException(status_code=500, detail=f"Failed to delete collection '{name}'")
             return {"success": True, "collection": name}

@@ -491,6 +491,14 @@ class FoundationalRagRetriever(BaseRetriever):
         metadata = result.get("metadata") or {}
         content_metadata = metadata.get("content_metadata") or {}
 
+        # For FRAG table/image chunks the raw content field is base64-encoded binary.
+        # Use the human-readable description from metadata when present.
+        description = metadata.get("description")
+        if isinstance(description, str) and description:
+            content = description
+        elif not isinstance(content, str):
+            content = ""
+
         # Strip temp file prefix (tmp + 8 random chars + _) for display; keep raw for delete ops
         display_name = re.sub(r"^tmp.{8}_", "", document_name_raw)
 

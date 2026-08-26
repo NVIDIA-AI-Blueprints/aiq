@@ -7,6 +7,9 @@
             "pattern": "^https?://127\\.0\\.0\\.1"
         },
         {
+            "pattern": "^https://build\\.nvidia\\.com(?:/.*)?$"
+        },
+        {
             "pattern": "^https?://www\\.npmjs\\.com/package/@nvidia/foundations-react-core$"
         },
         {
@@ -17,6 +20,27 @@
         },
         {
             "pattern": "^https://www\\.dask\\.org/$"
+        },
+        {
+            "pattern": "^https?://tavily\\.com/?$"
+        },
+        {
+            "pattern": "^https://exa\\.ai/?$"
+        },
+        {
+            "pattern": "^https?://modal\\.com/docs/reference/modal\\.config$"
+        },
+        {
+            "pattern": "^https://nimbleway\\.com/?$"
+        },
+        {
+            "pattern": "^https://docs\\.nimbleway\\.com/nimble-sdk/web-tools/search/?$"
+        },
+        {
+            "pattern": "^https?://huggingface\\.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard$"
+        },
+        {
+            "pattern": "^https://you\\.com/docs/api-reference/contents/?$"
         }
     ],
     "replacementPatterns": [

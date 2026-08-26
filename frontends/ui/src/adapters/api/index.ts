@@ -72,7 +72,19 @@ export type {
   DataSourcesClientOptions,
   DataSourceFromAPI,
   DataSourcesResponse,
+  PerUserAuthInfoFromAPI,
+  PerUserAuthStatus,
 } from './data-sources-client'
+
+// MCP Auth Client (per-user OAuth control plane)
+export { createMcpAuthClient, openAuthPopupAndWait } from './mcp-auth-client'
+export type {
+  McpAuthClient,
+  McpAuthClientOptions,
+  SourceAuthStatusResponse,
+  SourceConnectResponse,
+  AuthPopupResult,
+} from './mcp-auth-client'
 
 // Documents Schemas
 export {
@@ -110,6 +122,7 @@ export type {
   ToolStartEvent,
   ToolEndEvent,
   TodoItem,
+  FileArtifactUpdate,
   ArtifactUpdateEvent,
   DeepResearchEvent,
   DeepResearchCallbacks,

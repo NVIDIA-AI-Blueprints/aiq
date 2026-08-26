@@ -42,7 +42,6 @@ export const NoSourcesBanner: FC<NoSourcesBannerProps> = ({ isAuthenticated = fa
   const enabledDataSourceIds = useLayoutStore((state) => state.enabledDataSourceIds)
   const sessionId = useChatStore((state) => state.currentConversation?.id)
 
-  // Get completed files for the current session from the documents store
   const hasAvailableFiles = useDocumentsStore((state) =>
     state.trackedFiles.some(
       (f) => f.collectionName === sessionId && f.status === 'success'
@@ -52,14 +51,10 @@ export const NoSourcesBanner: FC<NoSourcesBannerProps> = ({ isAuthenticated = fa
   const hasAnySources = enabledDataSourceIds.length > 0
   const shouldShow = !hasAnySources && !hasAvailableFiles
 
-  // Track previous shouldShow to detect when conditions improve.
-  // When the warning condition clears (sources/files become available),
-  // reset the dismiss state so the banner can reappear if conditions worsen again.
   const prevShouldShowRef = useRef(shouldShow)
 
   useEffect(() => {
     const prev = prevShouldShowRef.current
-    // Conditions improved: was showing (or would show) -> now resolved
     if (prev && !shouldShow) {
       setIsDismissedByUser(false)
     }

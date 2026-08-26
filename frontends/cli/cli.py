@@ -23,6 +23,7 @@ import uuid
 import warnings
 from pathlib import Path
 
+import nemo_relay
 import yaml
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
@@ -372,13 +373,21 @@ async def interactive_loop(session_manager: SessionManager, verbose: bool = Fals
                     else:
                         result = await runner.result(to_type=str)
 
-                    parse_and_display_response(result, verbose=verbose)
+                # Relay subscriber delivery is asynchronous. Wait until the run context has
+                # closed its outer scopes before displaying the answer and opening the next
+                # prompt, otherwise late lifecycle logs can be painted after ``You:``.
+                try:
+                    await nemo_relay.subscribers.flush_async()
+                except Exception as error:  # noqa: BLE001 - telemetry must not suppress the answer
+                    logger.warning("NeMo Relay flush failed (error_type=%s)", type(error).__name__)
 
-                    # Check if the response indicates a critical error (e.g., missing API key)
-                    # This is a fallback in case validation didn't catch it earlier
-                    if "Missing Required API Keys" in result or "Missing keys:" in result:
-                        console.print("[bold red]Cannot continue without required API keys. Exiting.[/bold red]")
-                        break
+                parse_and_display_response(result, verbose=verbose)
+
+                # Check if the response indicates a critical error (e.g., missing API key)
+                # This is a fallback in case validation didn't catch it earlier
+                if "Missing Required API Keys" in result or "Missing keys:" in result:
+                    console.print("[bold red]Cannot continue without required API keys. Exiting.[/bold red]")
+                    break
 
             except (EOFError, KeyboardInterrupt):
                 console.print("\n\n[bold green]Goodbye! Happy researching![/bold green]")
@@ -396,14 +405,6 @@ def main() -> None:
         logging.basicConfig(
             level=logging.INFO, format="%(levelname)s - %(name)s - %(message)s", handlers=[logging.StreamHandler()]
         )
-        callbacks_logger = logging.getLogger("aiq_agent.callbacks")
-        callbacks_logger.setLevel(logging.DEBUG)
-
-        cb_handler = logging.StreamHandler()
-        cb_handler.setFormatter(logging.Formatter("%(message)s"))
-        callbacks_logger.handlers.clear()
-        callbacks_logger.addHandler(cb_handler)
-        callbacks_logger.propagate = False
     else:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(name)s - %(message)s")
 

@@ -67,7 +67,7 @@ Base path: `/v1/jobs/async`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/v1/jobs/async/agents` | GET | List available agent types |
+| `/v1/jobs/async/agents` | GET | List public agents configured in the active workflow |
 | `/v1/jobs/async/submit` | POST | Submit a new job |
 | `/v1/jobs/async/job/{id}` | GET | Get job status |
 | `/v1/jobs/async/job/{id}/stream` | GET | SSE stream from beginning |
@@ -77,6 +77,11 @@ Base path: `/v1/jobs/async`
 | `/v1/jobs/async/job/{id}/report` | GET | Get final report |
 
 ### List Available Agents
+
+The default catalog registers both `deep_researcher` and `shallow_researcher`, but this
+endpoint returns an agent only when its function config is present in the active
+workflow. It does not check credentials, source connectivity, tool health, or Dask
+readiness.
 
 ```bash
 curl http://localhost:8000/v1/jobs/async/agents
@@ -101,7 +106,21 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
   -d '{"agent_type": "deep_researcher", "input": "Research quantum computing trends in 2026"}'
 ```
 
-Optional body fields: `job_id` (custom ID), `expiry_seconds` (600–604800), `data_sources` (subset of IDs from `/v1/data_sources`; `[]` disables data-source tools while leaving unmapped utility tools available; unknown IDs return 422).
+Optional body fields: `job_id` (custom ID), `expiry_seconds` (600–604800), `data_sources` (subset of IDs from `/v1/data_sources`; `[]` disables data-source tools while leaving unmapped utility tools available; unknown IDs and sources unavailable to the selected agent return 422).
+
+A public catalog agent that is absent from the active workflow returns `400` before a
+job is created:
+
+```json
+{
+  "detail": {
+    "code": "agent_not_configured",
+    "message": "Agent 'shallow_researcher' is not configured in the active workflow",
+    "agent_type": "shallow_researcher",
+    "config_name": "shallow_research_agent"
+  }
+}
+```
 
 Response:
 
@@ -149,7 +168,7 @@ Events streamed during job execution:
 | `workflow.start` / `workflow.end` | Workflow lifecycle |
 | `llm.start` / `llm.chunk` / `llm.end` | LLM inference progress |
 | `tool.start` / `tool.end` | Tool invocations |
-| `artifact.update` | Todos, files, citations, output updates |
+| `artifact.update` | Todos, citations, output, and generated-file metadata (`content_url` for durable bytes) |
 | `job.error` | Error occurred |
 
 ## Configuration
