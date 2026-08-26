@@ -132,6 +132,7 @@ export AIQ_CHECKPOINT_DB="$RUNTIME_ROOT/checkpoints.db"
 export AIQ_SUMMARY_DB="sqlite+aiosqlite:///$RUNTIME_ROOT/summaries.db"
 export AIQ_CHROMA_DIR="$RUNTIME_ROOT/chroma"
 export AZURE_SEARCH_ENDPOINT="https://azure-search.invalid"
+export NRL_SCOPE="ci"
 export MCP_TOKEN_DB="$RUNTIME_ROOT/mcp_tokens.db"
 export AIQ_OPENSHELL_POLICY_FILE="$RUNTIME_ROOT/configs/openshell/aiq-research-policy.yaml"
 

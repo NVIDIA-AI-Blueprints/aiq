@@ -210,6 +210,15 @@ class TestSummaryStore:
         assert len(docs) == 1
         assert docs[0].summary == "Updated summary"
 
+    def test_register_preserves_existing_when_upsert_disabled(self, store):
+        """Test insert-only registration preserves an existing filename's summary."""
+        store.register("collection", "doc.pdf", "Original summary")
+        store.register("collection", "doc.pdf", "Ignored summary", upsert=False)
+
+        docs = store.get_all("collection")
+        assert len(docs) == 1
+        assert docs[0].summary == "Original summary"
+
     def test_get_all_empty_collection(self, store):
         """Test getting documents from empty collection returns empty list."""
         docs = store.get_all("nonexistent_collection")

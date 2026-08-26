@@ -1,0 +1,167 @@
+# Example values for running API pods against one shared Dask scheduler and a
+# dedicated worker pool. The API container entrypoint detects the external
+# scheduler address and does not start its embedded scheduler or worker.
+#
+# A submitted async job runs on one worker pod. Increase worker replicas for
+# cross-job parallelism and isolation; a single job's internal async research
+# fan-out remains inside the worker that owns that job.
+
+x-aiq-agent-image: &aiq-agent-image
+  repository: nvcr.io/nvidia/blueprint/aiq-agent
+  tag: "2.2.0"
+  pullPolicy: IfNotPresent
+
+x-dask-scheduler-address: &dask-scheduler-address tls://aiq-dask-scheduler:8786
+
+aiq:
+  apps:
+    backend:
+      env:
+        NAT_DASK_SCHEDULER_ADDRESS: *dask-scheduler-address
+        DASK_DISTRIBUTED__COMM__REQUIRE_ENCRYPTION: "true"
+        DASK_DISTRIBUTED__COMM__TLS__CA_FILE: /etc/dask-tls/ca.crt
+        DASK_DISTRIBUTED__COMM__TLS__CLIENT__CERT: /etc/dask-tls/tls.crt
+        DASK_DISTRIBUTED__COMM__TLS__CLIENT__KEY: /etc/dask-tls/tls.key
+      volumeMounts:
+        - name: dask-client-tls
+          mountPath: /etc/dask-tls
+          readOnly: true
+      volumes:
+        - name: postgres-init
+          configMap:
+            name: aiq-postgres-init
+        - name: dask-client-tls
+          secret:
+            secretName: aiq-dask-client-tls # pragma: allowlist secret
+
+    dask-scheduler:
+      enabled: true
+      mountSharedSecrets: false
+      replicas: 1
+      deploymentStrategy:
+        type: Recreate
+      image: *aiq-agent-image
+      command:
+        - dask-scheduler
+      args:
+        - --host
+        - 0.0.0.0
+        - --port
+        - "8786"
+        - --dashboard-address
+        - :8787
+        - --protocol
+        - tls
+        - --tls-ca-file
+        - /etc/dask-tls/ca.crt
+        - --tls-cert
+        - /etc/dask-tls/tls.crt
+        - --tls-key
+        - /etc/dask-tls/tls.key
+      ports:
+        - name: scheduler
+          containerPort: 8786
+          protocol: TCP
+        - name: dashboard
+          containerPort: 8787
+          protocol: TCP
+      service:
+        type: ClusterIP
+        port: 8786
+        targetPort: 8786
+      healthCheck:
+        enabled: true
+        livenessProbe:
+          tcpSocket:
+            port: 8786
+          initialDelaySeconds: 10
+          periodSeconds: 15
+        readinessProbe:
+          tcpSocket:
+            port: 8786
+          initialDelaySeconds: 2
+          periodSeconds: 5
+      networkPolicy:
+        enabled: true
+        allowedApps:
+          - backend
+          - dask-worker
+        ports:
+          - protocol: TCP
+            port: 8786
+      resources:
+        requests:
+          cpu: 250m
+          memory: 512Mi
+        limits:
+          cpu: "1"
+          memory: 2Gi
+      env:
+        DASK_DISTRIBUTED__LOGGING__DISTRIBUTED: warning
+        DASK_DISTRIBUTED__COMM__REQUIRE_ENCRYPTION: "true"
+      labels:
+        component: dask-scheduler
+      volumeMounts:
+        - name: dask-scheduler-tls
+          mountPath: /etc/dask-tls
+          readOnly: true
+      volumes:
+        - name: dask-scheduler-tls
+          secret:
+            secretName: aiq-dask-scheduler-tls # pragma: allowlist secret
+
+    dask-worker:
+      enabled: true
+      replicas: 4
+      image: *aiq-agent-image
+      command:
+        - dask-worker
+      args:
+        - *dask-scheduler-address
+        - --nworkers
+        - "1"
+        - --nthreads
+        - "1"
+        - --memory-limit
+        - 3GiB
+        - --no-dashboard
+        - --tls-ca-file
+        - /etc/dask-tls/ca.crt
+        - --tls-cert
+        - /etc/dask-tls/tls.crt
+        - --tls-key
+        - /etc/dask-tls/tls.key
+      service:
+        enabled: false
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: "2"
+          memory: 4Gi
+      # Workers load the same workflow config and runtime endpoints as the API.
+      # Shared secrets are mounted into every app by the default chart values.
+      env:
+        NAT_DASK_SCHEDULER_ADDRESS: *dask-scheduler-address
+        CONFIG_FILE: configs/config_web_default_llamaindex.yml
+        NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        RAG_SERVER_URL: http://rag-server:8080
+        RAG_INGEST_URL: http://rag-ingest:8080
+        COLLECTION_NAME: default_collection
+        AIQ_CHROMA_DIR: /app/data/chroma
+        MODE: web
+        DASK_DISTRIBUTED__LOGGING__DISTRIBUTED: warning
+        DASK_DISTRIBUTED__COMM__REQUIRE_ENCRYPTION: "true"
+      labels:
+        component: dask-worker
+      volumeMounts:
+        - name: dask-worker-tls
+          mountPath: /etc/dask-tls
+          readOnly: true
+      volumes:
+        - name: dask-worker-tls
+          secret:
+            secretName: aiq-dask-worker-tls # pragma: allowlist secret

@@ -1,8 +1,15 @@
 {{- range $appName, $appConfig := .Values.apps }}
-{{- if $appConfig.enabled }}
 {{- $defaults := $.Values.appDefaults | default dict }}
 {{- $defaultService := $defaults.service | default dict }}
 {{- $appService := $appConfig.service | default dict }}
+{{- $serviceEnabled := true }}
+{{- if hasKey $defaultService "enabled" }}
+{{- $serviceEnabled = $defaultService.enabled }}
+{{- end }}
+{{- if hasKey $appService "enabled" }}
+{{- $serviceEnabled = $appService.enabled }}
+{{- end }}
+{{- if and $appConfig.enabled $serviceEnabled }}
 ---
 apiVersion: v1
 kind: Service
