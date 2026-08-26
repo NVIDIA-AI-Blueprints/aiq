@@ -27,6 +27,7 @@ import os
 import secrets
 import time
 from contextlib import suppress
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -51,6 +52,7 @@ from .admission import release_deep_research_job_reservation
 from .admission import renew_deep_research_job_reservation
 from .admission import reserve_deep_research_job
 from .admission import validate_deep_research_input
+from .runner import JobTraceCorrelation
 from .runner import run_agent_job
 
 logger = logging.getLogger(__name__)
@@ -105,68 +107,22 @@ def _resolve_admission_principal(principal: Principal) -> Principal:
     return Principal(type="anonymous", sub="anonymous")
 
 
-def _current_conversation_id() -> str | None:
-    """Best-effort read of the originating conversation id from the NAT context."""
-    try:
-        from nat.builder.context import ContextState
-
-        return ContextState.get().conversation_id.get()
-    except Exception:
-        return None
-
-
-def _get_parent_trace_context() -> tuple[
-    str | None,  # parent_span_id
-    str | None,  # parent_function_id
-    str | None,  # parent_function_name
-    str | None,  # parent_workflow_run_id
-    int | str | None,  # parent_workflow_trace_id
-    str | None,  # parent_conversation_id
-    dict[str, str],  # request_trace_tags
-]:
-    """
-    Extract trace context from current workflow for propagation to async jobs.
-
-    This enables nested spans in Phoenix - the async job will appear as a child
-    of the workflow that submitted it.
-
-    Returns:
-        Tuple of (parent_span_id, parent_function_id, parent_function_name,
-                  parent_workflow_run_id, parent_workflow_trace_id, parent_conversation_id, request_trace_tags)
-    """
+def _get_job_trace_correlation() -> JobTraceCorrelation:
+    """Capture identifiers that correlate an independent async-job trace to its submission."""
     try:
         from nat.builder.context import ContextState
     except ImportError:
-        return (None, None, None, None, None, None, {})
+        return JobTraceCorrelation(request_trace_tags=get_current_trace_tags())
 
     context_state = ContextState.get()
-
-    # Extract workflow-level context
-    parent_workflow_run_id = context_state.workflow_run_id.get()
-    parent_workflow_trace_id = context_state.workflow_trace_id.get()
-    parent_conversation_id = context_state.conversation_id.get()
-
-    # Extract span hierarchy context
-    parent_span_id = None
+    workflow_trace_id = context_state.workflow_trace_id.get()
     active_stack = context_state.active_span_id_stack.get()
-    if active_stack and len(active_stack) > 1:
-        parent_span_id = active_stack[1]
-
-    parent_function_id = None
-    parent_function_name = None
-    active_function = context_state.active_function.get()
-    if active_function and active_function.function_id != "root":
-        parent_function_id = active_function.function_id
-        parent_function_name = active_function.function_name
-
-    return (
-        parent_span_id,
-        parent_function_id,
-        parent_function_name,
-        parent_workflow_run_id,
-        parent_workflow_trace_id,
-        parent_conversation_id,
-        get_current_trace_tags(),
+    active_span_id = active_stack[-1] if active_stack and active_stack[-1] != "root" else None
+    return JobTraceCorrelation(
+        session_id=context_state.conversation_id.get(),
+        submission_trace_id=f"{workflow_trace_id:032x}" if workflow_trace_id is not None else None,
+        submission_span_id=active_span_id,
+        request_trace_tags=get_current_trace_tags(),
     )
 
 
@@ -180,6 +136,7 @@ async def submit_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    conversation_id: str | None = None,
     skip_encryption_readiness_check: bool = False,
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
@@ -202,6 +159,9 @@ async def submit_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        conversation_id: Optional originating conversation ID. REST callers
+            pass the ``conversation-id`` header explicitly because custom
+            FastAPI routes do not run inside NAT's execution context.
         skip_encryption_readiness_check: Skip the internal readiness check when
             the caller already performed it off the event loop.
         initial_files: Optional DeepAgents virtual filesystem files to seed into worker state.
@@ -332,7 +292,10 @@ async def submit_agent_job(
     reservation_ttl_seconds = (
         admission_limits.reservation_ttl_seconds if admission_limits is not None else DEFAULT_RESERVATION_TTL_SECONDS
     )
-    submission_conversation_id = _current_conversation_id()
+    trace_correlation = _get_job_trace_correlation()
+    if conversation_id is not None:
+        trace_correlation = replace(trace_correlation, session_id=conversation_id)
+    submission_conversation_id = trace_correlation.session_id
 
     async def _release_submission_reservations() -> None:
         """Conditionally release only reservations owned by this submitter."""
@@ -458,7 +421,7 @@ async def submit_agent_job(
                 input_text,
                 agent_config.class_path,
                 agent_config.config_name,
-                *_get_parent_trace_context(),
+                trace_correlation,
                 available_documents,
                 data_sources,
                 auth_token,

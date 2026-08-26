@@ -245,3 +245,97 @@ def test_backend_uses_separate_liveness_and_readiness_endpoints():
 
     assert backend_container["livenessProbe"]["httpGet"]["path"] == "/live"
     assert backend_container["readinessProbe"]["httpGet"]["path"] == "/health"
+
+
+def test_shared_dask_example_renders_secured_external_scheduler_and_workers():
+    manifests = render_chart("-f", str(REPO_ROOT / "deploy" / "helm" / "examples" / "shared-dask-values.yaml"))
+    deployments = {
+        manifest["metadata"]["name"]: manifest for manifest in manifests if manifest.get("kind") == "Deployment"
+    }
+    services = {manifest["metadata"]["name"]: manifest for manifest in manifests if manifest.get("kind") == "Service"}
+    network_policies = {
+        manifest["metadata"]["name"]: manifest for manifest in manifests if manifest.get("kind") == "NetworkPolicy"
+    }
+
+    backend = deployments["aiq-backend"]["spec"]["template"]["spec"]["containers"][0]
+    scheduler = deployments["aiq-dask-scheduler"]["spec"]["template"]["spec"]["containers"][0]
+    worker_deployment = deployments["aiq-dask-worker"]
+    worker = worker_deployment["spec"]["template"]["spec"]["containers"][0]
+
+    backend_env = {item["name"]: item["value"] for item in backend["env"] if "value" in item}
+    scheduler_env = {item["name"]: item["value"] for item in scheduler["env"] if "value" in item}
+    worker_env = {item["name"]: item["value"] for item in worker["env"] if "value" in item}
+    for deployment_name, container, volume_name, secret_name in (
+        ("aiq-backend", backend, "dask-client-tls", "aiq-dask-client-tls"),
+        ("aiq-dask-scheduler", scheduler, "dask-scheduler-tls", "aiq-dask-scheduler-tls"),
+        ("aiq-dask-worker", worker, "dask-worker-tls", "aiq-dask-worker-tls"),
+    ):
+        pod_spec = deployments[deployment_name]["spec"]["template"]["spec"]
+        tls_volume = next(volume for volume in pod_spec["volumes"] if volume["name"] == volume_name)
+        tls_mount = next(mount for mount in container["volumeMounts"] if mount["name"] == volume_name)
+        assert tls_volume["secret"]["secretName"] == secret_name
+        assert tls_mount == {"name": volume_name, "mountPath": "/etc/dask-tls", "readOnly": True}
+
+    assert backend_env["NAT_DASK_SCHEDULER_ADDRESS"] == "tls://aiq-dask-scheduler:8786"
+    assert backend_env["DASK_DISTRIBUTED__COMM__REQUIRE_ENCRYPTION"] == "true"
+    assert scheduler["command"] == ["dask-scheduler"]
+    assert scheduler["args"][scheduler["args"].index("--protocol") + 1] == "tls"
+    assert scheduler["readinessProbe"]["tcpSocket"]["port"] == 8786
+    assert scheduler_env["DASK_DISTRIBUTED__COMM__REQUIRE_ENCRYPTION"] == "true"
+    assert "envFrom" not in scheduler
+    assert worker_deployment["spec"]["replicas"] == 4
+    assert worker["command"] == ["dask-worker"]
+    assert worker["args"][0] == "tls://aiq-dask-scheduler:8786"
+    assert "--tls-ca-file" in worker["args"]
+    assert worker_env["NAT_DASK_SCHEDULER_ADDRESS"] == "tls://aiq-dask-scheduler:8786"
+    assert worker_env["CONFIG_FILE"] == "configs/config_web_default_llamaindex.yml"
+    assert "aiq-dask-scheduler" in services
+    assert "aiq-dask-worker" not in services
+
+    scheduler_policy = network_policies["aiq-dask-scheduler"]["spec"]
+    allowed_apps = {peer["podSelector"]["matchLabels"]["app"] for peer in scheduler_policy["ingress"][0]["from"]}
+    assert scheduler_policy["podSelector"]["matchLabels"]["app"] == "aiq-dask-scheduler"
+    assert allowed_apps == {"aiq-backend", "aiq-dask-worker"}
+    assert scheduler_policy["ingress"][0]["ports"] == [{"protocol": "TCP", "port": 8786}]
+
+
+def test_network_policy_rejects_missing_port_allowlist():
+    result = subprocess.run(
+        [
+            "helm",
+            "template",
+            "aiq",
+            str(CHART_PATH),
+            "-f",
+            str(REPO_ROOT / "deploy" / "helm" / "examples" / "shared-dask-values.yaml"),
+            "--set-json",
+            "aiq.apps.dask-scheduler.networkPolicy.ports=[]",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "apps.dask-scheduler.networkPolicy.ports must contain at least one port" in result.stderr
+
+
+def test_shared_dask_scheduler_excludes_inline_shared_secrets():
+    manifests = render_chart(
+        "-f",
+        str(REPO_ROOT / "deploy" / "helm" / "examples" / "shared-dask-values.yaml"),
+        "--set",
+        "aiq.secretEnvAsEnv=true",
+        "--set-string",
+        "aiq.secretEnv.TEST_SHARED_SECRET=test-only",
+    )
+    deployments = {
+        manifest["metadata"]["name"]: manifest for manifest in manifests if manifest.get("kind") == "Deployment"
+    }
+    scheduler = deployments["aiq-dask-scheduler"]["spec"]["template"]["spec"]["containers"][0]
+    worker = deployments["aiq-dask-worker"]["spec"]["template"]["spec"]["containers"][0]
+    scheduler_env_names = {item["name"] for item in scheduler["env"]}
+    worker_env = {item["name"]: item.get("value") for item in worker["env"]}
+
+    assert "TEST_SHARED_SECRET" not in scheduler_env_names
+    assert worker_env["TEST_SHARED_SECRET"] == "test-only"  # pragma: allowlist secret

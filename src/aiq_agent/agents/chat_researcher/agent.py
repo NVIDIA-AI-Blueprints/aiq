@@ -46,7 +46,9 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 from aiq_agent.common.logging_utils import log_identifier_ref
+from aiq_agent.relay import run_agent
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
@@ -60,6 +62,7 @@ except ImportError:
 
 from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from .models import ChatResearcherState
+from .models import IntentResult
 from .models import ShallowResult
 from .models import WorkflowFailure
 from .utils import trim_message_history
@@ -128,6 +131,7 @@ class ChatResearcherAgent:
         report_edit_job_submitter: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
         report_edit_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
         report_seed_files_fn: Callable[[ChatResearcherState], Awaitable[dict[str, Any] | None]] | None = None,
+        hybrid_research_fn: Callable[[ChatResearcherState], Awaitable[dict[str, Any]]] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         validate_deep_research_tools_fn: Callable[[list[str] | None], tuple[bool, str]] | None = None,
     ) -> None:
@@ -161,6 +165,7 @@ class ChatResearcherAgent:
         self.report_edit_job_submitter = report_edit_job_submitter
         self.report_edit_fn = report_edit_fn
         self.report_seed_files_fn = report_seed_files_fn
+        self.hybrid_research_fn = hybrid_research_fn
         self.checkpointer = checkpointer
         self.validate_deep_research_tools_fn = validate_deep_research_tools_fn
 
@@ -170,7 +175,44 @@ class ChatResearcherAgent:
         """Build the LangGraph workflow."""
 
         async def intent_classifier_node(state: ChatResearcherState) -> dict[str, Any]:
-            return await self.intent_classifier_fn(state)
+            try:
+                return await run_agent(
+                    "intent_classifier",
+                    lambda: self.intent_classifier_fn(state),
+                    input_value={
+                        "message_count": len(state.messages),
+                        "data_source_count": len(state.data_sources or []),
+                        "has_active_report": bool(state.active_report_job_id),
+                    },
+                )
+            except Exception as error:
+                logger.warning("Intent routing failed (error_type=%s)", type(error).__name__)
+                return {
+                    "user_intent": IntentResult(intent="meta", target="meta"),
+                    "messages": [
+                        AIMessage(
+                            content=(
+                                "There was an error routing your request. Please try again. "
+                                "If the problem persists, please contact support."
+                            )
+                        )
+                    ],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
+
+        async def hybrid_research_node(state: ChatResearcherState) -> dict[str, Any]:
+            try:
+                if self.hybrid_research_fn is None:
+                    raise RuntimeError("Hybrid research is not configured")
+                return await self.hybrid_research_fn(state)
+            except Exception as error:
+                logger.error("Hybrid research failed (error_type=%s)", type(error).__name__)
+                return {
+                    "messages": [
+                        AIMessage(content="I ran into an error while researching your question. Please try again.")
+                    ],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
 
         async def clarifier_node(state: ChatResearcherState) -> dict[str, Any]:
             original_query = get_latest_user_query(state.messages)
@@ -179,7 +221,7 @@ class ChatResearcherAgent:
             if self.validate_deep_research_tools_fn:
                 is_valid, error_msg = self.validate_deep_research_tools_fn(state.data_sources)
                 if not is_valid:
-                    logger.error("Deep research tools validation failed: %s", error_msg)
+                    logger.error("Deep research tools validation failed (detail_%s)", log_content_metadata(error_msg))
                     return Command(
                         goto=END,
                         update={
@@ -189,7 +231,8 @@ class ChatResearcherAgent:
                         },
                     )
 
-            if self.enable_clarifier and not state.skip_clarifier:
+            uses_parent_report = bool(state.user_intent and state.user_intent.use_parent_report_context)
+            if self.enable_clarifier and not state.skip_clarifier and not uses_parent_report:
                 if self.clarifier_fn is None:
                     raise ValueError(
                         "enable_clarifier is True but clarifier_agent is not defined in config. "
@@ -217,8 +260,8 @@ class ChatResearcherAgent:
             trimmed_messages: list[BaseMessage] = trim_message_history(state.messages, self.max_history)
 
             logger.debug(
-                "shallow_research_node: ChatResearcherState.available_documents = %s",
-                state.available_documents,
+                "shallow_research_node: available_document_count=%d",
+                len(state.available_documents or []),
             )
 
             try:
@@ -246,7 +289,11 @@ class ChatResearcherAgent:
                 }
             except Exception as e:
                 if _AuthError and isinstance(e, _AuthError):
-                    logger.warning("Auth error in shallow research: %s", e)
+                    logger.warning(
+                        "Auth error in shallow research (error_type=%s detail_%s)",
+                        type(e).__name__,
+                        log_content_metadata(e),
+                    )
                     err_msg = str(e)
                     return {
                         "messages": [AIMessage(content=err_msg)],
@@ -257,7 +304,11 @@ class ChatResearcherAgent:
                             escalate_to_deep=False,
                         ),
                     }
-                logger.exception("Error in shallow research: %s", e)
+                logger.error(
+                    "Error in shallow research (error_type=%s detail_%s)",
+                    type(e).__name__,
+                    log_content_metadata(e),
+                )
                 err_msg = "An error occurred while researching your question. Please try again."
                 # Same rationale as EmptySourceRegistryError: the system is certain an error
                 # occurred; escalating to deep research will not resolve an unexpected exception.
@@ -310,7 +361,11 @@ class ChatResearcherAgent:
                     # turn — submit_agent_job raises McpAuthRequiredError (an AuthError)
                     # before enqueue when a selected source isn't connected.
                     if _AuthError and isinstance(e, _AuthError):
-                        logger.warning("Auth required before deep research submit: %s", e)
+                        logger.warning(
+                            "Auth required before deep research submit (error_type=%s detail_%s)",
+                            type(e).__name__,
+                            log_content_metadata(e),
+                        )
                         return {
                             "messages": [AIMessage(content=str(e))],
                             "workflow_outcome": _research_workflow_failure(),
@@ -366,14 +421,22 @@ class ChatResearcherAgent:
                 }
             except Exception as e:
                 if _AuthError and isinstance(e, _AuthError):
-                    logger.warning("Auth error in deep research: %s", e)
+                    logger.warning(
+                        "Auth error in deep research (error_type=%s detail_%s)",
+                        type(e).__name__,
+                        log_content_metadata(e),
+                    )
                     return {
                         "messages": [AIMessage(content=str(e))],
                         "workflow_outcome": _research_workflow_failure(),
                     }
                 # Inline (synchronous CLI) path: a raised exception would crash the whole CLI turn.
                 # Degrade to a chat message instead (the error is logged for debugging).
-                logger.error("Inline deep research failed (error_type=%s)", type(e).__name__, exc_info=True)
+                logger.error(
+                    "Inline deep research failed (error_type=%s detail_%s)",
+                    type(e).__name__,
+                    log_content_metadata(e),
+                )
                 return {
                     "messages": [
                         AIMessage(content="I ran into an error while producing that report. Please try again.")
@@ -474,6 +537,8 @@ class ChatResearcherAgent:
                 if state.user_intent.report_action == "edit":
                     return "report_edit"
                 return "report_ask"
+            if state.user_intent and state.user_intent.target == "hybrid_research":
+                return "hybrid_research"
             if state.depth_decision and state.depth_decision.decision == "deep":
                 return "clarifier"
             return "shallow_research"
@@ -521,6 +586,7 @@ class ChatResearcherAgent:
         graph.add_node("deep_research", deep_research_node)
         graph.add_node("report_ask", report_ask_node)
         graph.add_node("report_edit", report_edit_node)
+        graph.add_node("hybrid_research", hybrid_research_node)
 
         graph.set_entry_point("intent_classifier")
 
@@ -533,6 +599,7 @@ class ChatResearcherAgent:
                 "shallow_research": "shallow_research",
                 "report_ask": "report_ask",
                 "report_edit": "report_edit",
+                "hybrid_research": "hybrid_research",
             },
         )
 
@@ -548,6 +615,7 @@ class ChatResearcherAgent:
         graph.add_edge("deep_research", END)
         graph.add_edge("report_ask", END)
         graph.add_edge("report_edit", END)
+        graph.add_edge("hybrid_research", END)
 
         return graph.compile(checkpointer=self.checkpointer)
 
@@ -567,18 +635,26 @@ class ChatResearcherAgent:
         logger.info("ChatResearcherAgent: Starting workflow")
 
         if isinstance(state, dict):
-            input_state = state
+            input_state = {
+                **state,
+                "database_name": state.get("database_name"),
+                "catalog_context": None,
+                "catalog_request_id": None,
+            }
             messages = state.get("messages", [])
         else:
             input_state = {
                 "messages": state.messages,
                 "user_info": state.user_info,
                 "data_sources": state.data_sources,
+                "database_name": state.database_name,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
                 "workflow_outcome": None,
                 "skip_clarifier": state.skip_clarifier,
                 "active_report_job_id": state.active_report_job_id,
+                "catalog_context": None,
+                "catalog_request_id": None,
                 # Pass through; the keep-if-set reducer preserves a prior in-session report when
                 # this turn supplies None, so report follow-up works across turns without a job.
                 "last_report_markdown": state.last_report_markdown,
@@ -587,8 +663,30 @@ class ChatResearcherAgent:
 
         if messages:
             query = messages[-1].content
-            logger.info("Query: %s...", str(query)[:100] if query else "")
-        result = await self._graph.ainvoke(input_state, config=graph_config)
+            logger.info("Query: %s", log_content_metadata(query or ""))
+
+        async def _invoke_graph() -> dict[str, Any]:
+            effective_config = dict(graph_config or {})
+            return await self._graph.ainvoke(input_state, config=effective_config)
+
+        input_data_sources = (
+            input_state.get("data_sources") if isinstance(input_state, dict) else input_state.data_sources
+        )
+        relay_input_metadata = {
+            "message_count": len(messages),
+            "data_source_count": len(input_data_sources or []),
+            "has_active_report": bool(
+                input_state.get("active_report_job_id")
+                if isinstance(input_state, dict)
+                else input_state.active_report_job_id
+            ),
+        }
+        result = await run_agent(
+            "chat_deepresearcher_agent",
+            _invoke_graph,
+            session_id=thread_id,
+            input_value=relay_input_metadata,
+        )
 
         logger.info("ChatResearcherAgent: Workflow complete")
 

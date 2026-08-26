@@ -30,6 +30,7 @@ from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain.agents.middleware import ToolRetryMiddleware
 from langchain_core.language_models import BaseChatModel
@@ -40,7 +41,10 @@ from langgraph.store.memory import InMemoryStore
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import render_prompt_template
+from aiq_agent.relay import deepagents_kwargs
+from aiq_agent.relay import merge_langchain_middleware
 
+from .custom_middleware import RESEARCHER_FINALIZATION_MODEL_CALLS
 from .custom_middleware import ArtifactHarvestMiddleware
 from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import ExecuteTimeoutClampMiddleware
@@ -50,10 +54,13 @@ from .custom_middleware import FinalReportCommitTracker
 from .custom_middleware import FinalReportOwnershipGuardMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import RequiredOutputFileMiddleware
+from .custom_middleware import RequiredWriterDelegationMiddleware
+from .custom_middleware import ResearcherFinalizationMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import SourceRoutingPersistenceMiddleware
 from .custom_middleware import StateMutationGuardMiddleware
+from .custom_middleware import StructuredResponseTextFallbackMiddleware
 from .custom_middleware import TodoQuotaMiddleware
 from .custom_middleware import TodoSuppressionMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
@@ -139,6 +146,7 @@ class DeepResearchGraphContext:
     domain_catalog_path: str | None
     current_datetime: str
     max_research_concurrency: int
+    max_researcher_model_calls: int
     resource_limits: DeepResearchResourceLimits
     enable_source_router: bool
     backend: Any
@@ -371,6 +379,7 @@ def build_researcher_runnable(
     researcher_model: BaseChatModel,
     researcher_tools: list[BaseTool],
     researcher_middleware: list[Any],
+    max_researcher_model_calls: int,
     system_prompt: str,
     skill_sources: list[str] | None = None,
     backend: Any = None,
@@ -386,10 +395,17 @@ def build_researcher_runnable(
             FilesystemMiddleware(backend=backend, _permissions=filesystem_permissions),
             create_summarization_middleware(researcher_model, backend),
             PatchToolCallsMiddleware(),
+            ModelCallLimitMiddleware(
+                run_limit=max_researcher_model_calls + RESEARCHER_FINALIZATION_MODEL_CALLS,
+                exit_behavior="error",
+            ),
+            ResearcherFinalizationMiddleware(max_model_calls=max_researcher_model_calls),
+            StructuredResponseTextFallbackMiddleware(ResearchNotes),
             *researcher_middleware,
             *(visibility_middleware or []),
         ]
     )
+    middleware = merge_langchain_middleware(middleware)
     return create_agent(
         model=researcher_model,
         tools=researcher_tools,
@@ -457,6 +473,7 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
                         sandbox_enabled=context.runtime.execution_enabled,
                     ),
                     TodoSuppressionMiddleware(),
+                    StructuredResponseTextFallbackMiddleware(SourceRoutingPlan),
                     SourceRoutingPersistenceMiddleware(
                         backend=context.backend,
                         state_budget=context.state_budget,
@@ -487,6 +504,7 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
                     sandbox_enabled=context.runtime.execution_enabled,
                 ),
                 TodoSuppressionMiddleware(),
+                StructuredResponseTextFallbackMiddleware(ResearchPlan),
                 PlanPersistenceMiddleware(
                     backend=context.backend,
                     state_budget=context.state_budget,
@@ -527,7 +545,10 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
                 TodoSuppressionMiddleware(),
                 RequiredOutputFileMiddleware(tracker=context.final_report_tracker),
             ],
-            prompt_values={"parent_report_context_available": context.parent_report_context_available},
+            prompt_values={
+                "parent_report_context_available": context.parent_report_context_available,
+                "chart_skill_enabled": context.runtime.agent_has_chart_skill(WRITER_AGENT),
+            },
             skills=context.skill_sources(WRITER_AGENT),
         ),
     )
@@ -547,6 +568,7 @@ def build_deep_research_graph(
     callbacks: list[Any],
     domain_catalog_path: str | None,
     max_research_concurrency: int,
+    max_researcher_model_calls: int,
     final_report_tracker: FinalReportCommitTracker,
     state_budget: StateBudgetLedger | None = None,
     resource_limits: DeepResearchResourceLimits | None = None,
@@ -579,6 +601,7 @@ def build_deep_research_graph(
         domain_catalog_path=domain_catalog_path,
         current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         max_research_concurrency=max_research_concurrency,
+        max_researcher_model_calls=max_researcher_model_calls,
         resource_limits=limits,
         enable_source_router=enable_source_router,
         backend=runtime.backend,
@@ -609,6 +632,7 @@ def build_deep_research_graph(
                 sandbox_enabled=context.runtime.execution_enabled,
             ),
         ],
+        max_researcher_model_calls=context.max_researcher_model_calls,
         skill_sources=researcher_skill_sources,
         backend=context.backend,
         visibility_middleware=context.visibility_middleware,
@@ -626,38 +650,44 @@ def build_deep_research_graph(
 
     orchestrator_tools = [*context.tool_set.helper_tools, research_batch_tool]
     agent = create_deep_agent(
-        model=context.llm_provider.get(LLMRole.ORCHESTRATOR),
-        tools=orchestrator_tools,
-        system_prompt=context.render_prompt(
-            "orchestrator",
-            clarifier_result=context.state.clarifier_result,
-            # Advertise only the tools the orchestrator can actually call. Source
-            # tools (incl. per-user MCP tools like Google Drive) are NOT directly
-            # callable here — the orchestrator delegates all source access through
-            # run_research_batch to the researcher, which holds those tools. Listing
-            # them under "Available Tools" made the orchestrator call them directly
-            # (e.g. per_user_mcp_client__google_drive_read_file), which the runtime
-            # rejects since they aren't bound to this agent.
-            tools=[{"name": t.name, "description": t.description} for t in orchestrator_tools],
-            enable_source_router=context.enable_source_router,
-            max_research_concurrency=context.max_research_concurrency,
-            execution_enabled=context.runtime.execution_enabled,
-            parent_report_context_available=context.parent_report_context_available,
-        ),
-        subagents=build_deep_research_subagents(context),
-        store=InMemoryStore(),
-        middleware=context.middleware(
-            [
-                *context.middleware_set.orchestrator,
-                FinalReportOwnershipGuardMiddleware(),
-                StateMutationGuardMiddleware(
-                    writer=False,
-                    sandbox_enabled=context.runtime.execution_enabled,
+        **deepagents_kwargs(
+            dict(
+                model=context.llm_provider.get(LLMRole.ORCHESTRATOR),
+                name="deep_research_agent",
+                tools=orchestrator_tools,
+                system_prompt=context.render_prompt(
+                    "orchestrator",
+                    clarifier_result=context.state.clarifier_result,
+                    # Advertise only the tools the orchestrator can actually call. Source
+                    # tools (incl. per-user MCP tools like Google Drive) are NOT directly
+                    # callable here — the orchestrator delegates all source access through
+                    # run_research_batch to the researcher, which holds those tools. Listing
+                    # them under "Available Tools" made the orchestrator call them directly
+                    # (e.g. per_user_mcp_client__google_drive_read_file), which the runtime
+                    # rejects since they aren't bound to this agent.
+                    tools=[{"name": t.name, "description": t.description} for t in orchestrator_tools],
+                    enable_source_router=context.enable_source_router,
+                    max_research_concurrency=context.max_research_concurrency,
+                    execution_enabled=context.runtime.execution_enabled,
+                    parent_report_context_available=context.parent_report_context_available,
                 ),
-                TodoQuotaMiddleware(resource_limits=context.resource_limits),
-            ]
-        ),
-        permissions=context.permissions(ORCHESTRATOR_AGENT),
-        backend=context.backend,
+                subagents=build_deep_research_subagents(context),
+                store=InMemoryStore(),
+                middleware=context.middleware(
+                    [
+                        *context.middleware_set.orchestrator,
+                        FinalReportOwnershipGuardMiddleware(),
+                        StateMutationGuardMiddleware(
+                            writer=False,
+                            sandbox_enabled=context.runtime.execution_enabled,
+                        ),
+                        TodoQuotaMiddleware(resource_limits=context.resource_limits),
+                        RequiredWriterDelegationMiddleware(tracker=context.final_report_tracker),
+                    ]
+                ),
+                permissions=context.permissions(ORCHESTRATOR_AGENT),
+                backend=context.backend,
+            )
+        )
     )
     return agent.with_config({"recursion_limit": 2000})

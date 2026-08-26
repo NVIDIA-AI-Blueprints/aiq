@@ -25,11 +25,19 @@ import re
 from typing import Any
 from typing import cast
 
+import nemo_relay
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain.tools import ToolRuntime
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
 
+from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay import agent_scope
+
+from ..custom_middleware import ResearcherBudgetExhaustedError
+from ..models import EvidenceJudgment
+from ..models import ResearchGap
 from ..models import ResearchNotes
 from ..models import ResearchQuery
 from ..resource_limits import DeepResearchResourceLimits
@@ -37,8 +45,39 @@ from ..resource_limits import StateBudgetLedger
 
 _NO_TOOL_RUNTIME = cast(ToolRuntime, None)
 logger = logging.getLogger(__name__)
+
+
+class _MissingStructuredResponseError(ValueError):
+    """Raised when a researcher worker returns no structured response."""
+
+
 _NOTE_SLUG_MAX_LENGTH = 64
 RESEARCHER_AGENT_NAME = "researcher-agent"
+
+
+def _exhausted_research_notes(query: ResearchQuery) -> ResearchNotes:
+    """Build the deterministic fallback when the reserved finalization turn fails."""
+    return ResearchNotes(
+        query_topic=query.query[:120],
+        target_components=list(query.target_components),
+        summary="Research for this query was cut short because its model-call budget was exhausted.",
+        findings=[],
+        gaps=[
+            ResearchGap(
+                description=f"No grounded evidence was finalized for: {query.query}",
+                impact="Target components for this query may be unsupported in the final answer.",
+                suggested_follow_up_queries=[query.query],
+            )
+        ],
+        sources=[],
+        narrative_notes="The researcher did not return structured notes during its reserved finalization turn.",
+        language="en",
+        evidence_judgment=EvidenceJudgment(
+            relevance_score=0,
+            confidence="low",
+            rationale="The model-call budget was exhausted before verified findings were finalized.",
+        ),
+    )
 
 
 def format_research_request(query: ResearchQuery) -> str:
@@ -85,25 +124,43 @@ async def _run_research_query(
 ) -> ResearchNotes:
     """Run one researcher worker and return its structured notes."""
     async with semaphore:
-        try:
-            result = await researcher_runnable.ainvoke(
-                researcher_invoke_state(query, runtime),
-                config=researcher_invoke_config(runtime, callbacks),
-            )
-        except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-            raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
+        with agent_scope(RESEARCHER_AGENT_NAME, input_value=query) as lifecycle:
+            try:
+                result = await researcher_runnable.ainvoke(
+                    researcher_invoke_state(query, runtime),
+                    config=researcher_invoke_config(runtime, callbacks),
+                )
+            except (ModelCallLimitExceededError, ResearcherBudgetExhaustedError):
+                logger.warning(
+                    "Researcher worker exhausted its model-call budget (query_%s)",
+                    log_content_metadata(query.query),
+                )
+                return _exhausted_research_notes(query)
+            except Exception as exc:  # noqa: BLE001 - captured as per-item failure
+                logger.warning(
+                    "Researcher worker failed (error_type=%s, query_%s)",
+                    type(exc).__name__,
+                    log_content_metadata(query.query),
+                )
+                raise RuntimeError("researcher worker failed") from exc
 
-        try:
-            structured = result.get("structured_response") if isinstance(result, dict) else None
-            if structured is None:
-                raise ValueError("researcher worker did not return structured ResearchNotes")
-            note = ResearchNotes.model_validate(structured)
-        except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-            raise ValueError(
-                f"researcher worker returned invalid ResearchNotes for query {query.query!r}: {exc}"
-            ) from exc
+            try:
+                structured = result.get("structured_response") if isinstance(result, dict) else None
+                if structured is None:
+                    raise _MissingStructuredResponseError("researcher worker did not return structured ResearchNotes")
+                note = ResearchNotes.model_validate(structured)
+            except _MissingStructuredResponseError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - captured as per-item failure
+                logger.warning(
+                    "Researcher worker returned invalid ResearchNotes (error_type=%s, query_%s)",
+                    type(exc).__name__,
+                    log_content_metadata(query.query),
+                )
+                raise ValueError("researcher worker returned invalid ResearchNotes") from exc
 
-        return note
+            lifecycle.output = note
+            return note
 
 
 def _research_note_slug(text: str) -> str:
@@ -164,19 +221,20 @@ async def _run_research_queries(
 ) -> tuple[list[ResearchQuery], list[ResearchNotes], list[str]]:
     """Run researcher workers concurrently and collect successful query/note pairs plus surfaced errors."""
     semaphore = asyncio.Semaphore(min(max_concurrency, len(queries)))
-    raw_results = await asyncio.gather(
-        *(
+    tasks = [
+        asyncio.create_task(
             _run_research_query(
                 query=query,
                 researcher_runnable=researcher_runnable,
                 runtime=runtime,
                 callbacks=callbacks,
                 semaphore=semaphore,
-            )
-            for query in queries
-        ),
-        return_exceptions=True,
-    )
+            ),
+            context=nemo_relay.fork_asyncio_context(),
+        )
+        for query in queries
+    ]
+    raw_results = await asyncio.gather(*tasks, return_exceptions=True)
 
     successful_queries: list[ResearchQuery] = []
     notes: list[ResearchNotes] = []
@@ -184,7 +242,7 @@ async def _run_research_queries(
     for query, raw_result in zip(queries, raw_results, strict=False):
         if isinstance(raw_result, BaseException):
             error = str(raw_result) or raw_result.__class__.__name__
-            errors.append(f"{query.query}: {error}")
+            errors.append(error)
         else:
             successful_queries.append(query)
             notes.append(raw_result)

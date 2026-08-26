@@ -148,6 +148,8 @@ class JobManager:
         `first_poll_after_seconds` (state="queued").
         """
         classification = await self._runner.classify(query)
+        if _classification_failed(classification):
+            raise RuntimeError("Intent classification failed")
 
         intent = _extract_intent(classification)
         depth = _extract_depth(classification)
@@ -419,6 +421,11 @@ def _extract_depth(classification: dict[str, Any]) -> JobDepth:
     if isinstance(decision, dict) and decision.get("decision") in ("shallow", "deep"):
         return decision["decision"]
     return "shallow"
+
+
+def _classification_failed(classification: dict[str, Any]) -> bool:
+    outcome = classification.get("workflow_outcome")
+    return isinstance(outcome, WorkflowFailure) or (isinstance(outcome, dict) and outcome.get("status") == "failed")
 
 
 def _extract_intent(classification: dict[str, Any]) -> str:

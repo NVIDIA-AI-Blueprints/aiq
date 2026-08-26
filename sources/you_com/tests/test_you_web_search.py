@@ -16,6 +16,7 @@
 """Tests for the you_web_search NAT tool registration."""
 
 import asyncio
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -25,6 +26,24 @@ from pydantic import SecretStr
 from you_com.register import FreshnessMode
 from you_com.register import YouWebSearchToolConfig
 from you_com.register import you_web_search
+
+ADVERSARIAL_URL = 'https://example.com/pa\x00th?q="quoted"&next=<unsafe>&close=</Document>'
+ADVERSARIAL_TITLE = 'Research\x00 & "Roadmap" <2026> </title>'
+ADVERSARIAL_CONTENT = 'Evidence\x00 & "claims" <external> </Document> </title>'
+SANITIZED_URL = 'https://example.com/path?q="quoted"&next=<unsafe>&close=</Document>'
+SANITIZED_TITLE = 'Research & "Roadmap" <2026> </title>'
+SANITIZED_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
+
+
+def _parse_document(output: str) -> tuple[ET.Element, ET.Element]:
+    assert output.count("<Document ") == 1
+    assert output.count("</Document>") == 1
+    assert output.count("<title>") == 1
+    assert output.count("</title>") == 1
+    root = ET.fromstring(output)
+    title = root.find("title")
+    assert title is not None
+    return root, title
 
 
 def _make_doc(title="Title", url="https://example.com", description="", page_content="content", source=None):
@@ -83,6 +102,21 @@ class TestYouWebSearchStub:
 
 
 class TestYouWebSearchLive:
+    async def test_structurally_escapes_provider_fields(self, mock_search, monkeypatch):
+        monkeypatch.setenv("YDC_API_KEY", "test-key")
+        config = YouWebSearchToolConfig()
+
+        async with you_web_search(config, MagicMock()) as info:
+            mock_search["tool"].api_wrapper.results_async.return_value = [
+                _make_doc(ADVERSARIAL_TITLE, ADVERSARIAL_URL, page_content=ADVERSARIAL_CONTENT)
+            ]
+            output = await info.single_fn("query")
+
+        document, title = _parse_document(output)
+        assert document.attrib["href"] == SANITIZED_URL
+        assert (title.text or "").strip("\n") == SANITIZED_TITLE
+        assert (title.tail or "").strip("\n") == SANITIZED_CONTENT
+
     async def test_config_api_key_used(self, mock_search, monkeypatch):
         config = YouWebSearchToolConfig(api_key=SecretStr("key-from-config"))
         builder = MagicMock()
@@ -123,6 +157,33 @@ class TestYouWebSearchLive:
 
         assert "abcde" in out
         assert "abcdefgh" not in out
+        _, title = _parse_document(out)
+        assert (title.tail or "").strip() == "abcde"
+
+    async def test_zero_content_limit_omits_livecrawl_but_retains_description(self, mock_search, monkeypatch):
+        monkeypatch.setenv("YDC_API_KEY", "test-key")
+        config = YouWebSearchToolConfig(max_content_length=0)
+
+        async with you_web_search(config, MagicMock()) as info:
+            mock_search["tool"].api_wrapper.results_async.return_value = [
+                _make_doc(description="Description & <summary>", page_content=ADVERSARIAL_CONTENT)
+            ]
+            output = await info.single_fn("query")
+
+        _, title = _parse_document(output)
+        assert (title.tail or "").strip("\n") == "Description & <summary>"
+        assert SANITIZED_CONTENT not in output
+
+    async def test_none_content_limit_retains_unbounded_livecrawl(self, mock_search, monkeypatch):
+        monkeypatch.setenv("YDC_API_KEY", "test-key")
+        config = YouWebSearchToolConfig(max_content_length=None)
+
+        async with you_web_search(config, MagicMock()) as info:
+            mock_search["tool"].api_wrapper.results_async.return_value = [_make_doc(page_content=ADVERSARIAL_CONTENT)]
+            output = await info.single_fn("query")
+
+        _, title = _parse_document(output)
+        assert (title.tail or "").strip() == SANITIZED_CONTENT
 
     async def test_default_bounds_oversized_livecrawl_content(self, mock_search, monkeypatch):
         monkeypatch.setenv("YDC_API_KEY", "test-key")
@@ -196,7 +257,8 @@ class TestYouWebSearchLive:
 
     async def test_401_returns_friendly_message(self, mock_search, monkeypatch):
         monkeypatch.setenv("YDC_API_KEY", "test-key")
-        monkeypatch.setattr("you_com.register.asyncio.sleep", AsyncMock())
+        sleep = AsyncMock()
+        monkeypatch.setattr("you_com.register.asyncio.sleep", sleep)
         config = YouWebSearchToolConfig(max_retries=2)
         builder = MagicMock()
 
@@ -205,6 +267,8 @@ class TestYouWebSearchLive:
             out = await info.single_fn("q")
 
         assert "401" in out
+        assert mock_search["tool"].api_wrapper.results_async.call_count == 1
+        sleep.assert_not_awaited()
 
     async def test_wrapper_kwargs_exclude_none_freshness(self, mock_search, monkeypatch):
         monkeypatch.setenv("YDC_API_KEY", "test-key")

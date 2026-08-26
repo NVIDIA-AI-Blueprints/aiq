@@ -16,6 +16,7 @@
 """Tests for deep researcher graph and middleware factory helpers."""
 
 from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock
 from unittest.mock import patch
 
 from deepagents.middleware.filesystem import _apply_permissions_to_ls_results
@@ -29,10 +30,12 @@ from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommit
 from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommitTracker
 from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportOwnershipGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import RequiredOutputFileMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import RequiredWriterDelegationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingPersistenceMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import StateMutationGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import StructuredResponseTextFallbackMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoQuotaMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
@@ -135,6 +138,7 @@ def _graph_context(
         domain_catalog_path=None,
         current_datetime="2026-06-03 12:00:00",
         max_research_concurrency=6,
+        max_researcher_model_calls=100,
         resource_limits=limits,
         enable_source_router=enable_source_router,
         backend=runtime.backend,
@@ -264,9 +268,16 @@ def test_subagents_route_tools_and_writer_skills():
     assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["writer-agent"]["middleware"])
     assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["source-router-agent"]["middleware"])
     assert any(
+        isinstance(item, StructuredResponseTextFallbackMiddleware)
+        for item in by_name["source-router-agent"]["middleware"]
+    )
+    assert any(
         isinstance(item, SourceRoutingPersistenceMiddleware) for item in by_name["source-router-agent"]["middleware"]
     )
     assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["planner-agent"]["middleware"])
+    assert any(
+        isinstance(item, StructuredResponseTextFallbackMiddleware) for item in by_name["planner-agent"]["middleware"]
+    )
     assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["writer-agent"]["middleware"])
     assert any(isinstance(item, RequiredOutputFileMiddleware) for item in by_name["writer-agent"]["middleware"])
 
@@ -355,6 +366,7 @@ def test_graph_uses_researcher_config_key_for_researcher_skills():
             callbacks=[],
             domain_catalog_path=None,
             max_research_concurrency=6,
+            max_researcher_model_calls=100,
             final_report_tracker=FinalReportCommitTracker(),
         )
 
@@ -390,6 +402,7 @@ def test_graph_wires_filesystem_tool_call_guard_cross_cutting():
             callbacks=[],
             domain_catalog_path=None,
             max_research_concurrency=6,
+            max_researcher_model_calls=100,
             final_report_tracker=FinalReportCommitTracker(),
         )
 
@@ -403,6 +416,10 @@ def test_graph_wires_filesystem_tool_call_guard_cross_cutting():
     )
     assert any(
         isinstance(middleware, TodoQuotaMiddleware) for middleware in create_graph.call_args.kwargs["middleware"]
+    )
+    assert any(
+        isinstance(middleware, RequiredWriterDelegationMiddleware)
+        for middleware in create_graph.call_args.kwargs["middleware"]
     )
     assert any(
         isinstance(middleware, FinalReportOwnershipGuardMiddleware)
@@ -447,6 +464,7 @@ def test_graph_default_limits_are_shared_with_state_budget_ledger():
             callbacks=[],
             domain_catalog_path=None,
             max_research_concurrency=6,
+            max_researcher_model_calls=100,
             final_report_tracker=FinalReportCommitTracker(),
         )
 
@@ -483,7 +501,7 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     researcher_agent = MagicMock()
     researcher_model = MagicMock()
     shared_middleware = [MagicMock(name="shared_middleware")]
-    backend = MagicMock()
+    backend = NonCallableMagicMock()
 
     with (
         patch(
@@ -500,6 +518,7 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
             researcher_tools=[web_search_tool],
             system_prompt="rendered researcher prompt",
             researcher_middleware=shared_middleware,
+            max_researcher_model_calls=100,
             skill_sources=["/skills/research/"],
             backend=backend,
             visibility_middleware=[ToolVisibilityMiddleware(hidden_tool_names={"execute"})],
@@ -516,5 +535,7 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert "FilesystemMiddleware" in middleware_names
     assert "FakeSummarizationMiddleware" in middleware_names
     assert "PatchToolCallsMiddleware" in middleware_names
+    assert "StructuredResponseTextFallbackMiddleware" in middleware_names
     assert "ToolVisibilityMiddleware" in middleware_names
     assert kwargs["middleware"][-2] is shared_middleware[0]
+    assert middleware_names[0] == "NemoRelayMiddleware"

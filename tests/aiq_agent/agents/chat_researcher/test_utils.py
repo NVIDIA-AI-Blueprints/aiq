@@ -15,12 +15,16 @@
 
 """Tests for chat researcher utilities."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
+from pydantic import ValidationError
 
+from aiq_agent.agents.chat_researcher.utils import _extract_database_name_from_request_metadata
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
 from aiq_agent.agents.chat_researcher.utils import _extract_query_context
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
@@ -215,11 +219,68 @@ class TestExtractQueryContext:
         assert context.data_sources == []
 
     def test_explicit_empty_data_sources_preserved_object_payload(self):
-        from types import SimpleNamespace
-
         payload = SimpleNamespace(
             data_sources=[],
             messages=[SimpleNamespace(role="user", content="hello")],
         )
         context = _extract_query_context(payload)
         assert context.data_sources == []
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {
+                "database_name": "finance_prod",
+                "content": {"messages": [{"role": "user", "content": "Show revenue"}]},
+            },
+            {
+                "content": {
+                    "database_name": "finance_prod",
+                    "messages": [{"role": "user", "content": "Show revenue"}],
+                }
+            },
+        ],
+    )
+    def test_extract_database_name_from_request_payload(self, payload):
+        assert _extract_query_context(payload).database_name == "finance_prod"
+
+    def test_extract_database_name_from_inline_json(self):
+        context = _extract_query_context('{"query":"Show revenue","database_name":"finance-prod"}')
+        assert context.database_name == "finance-prod"
+
+    def test_extract_database_name_from_request_metadata(self):
+        metadata = SimpleNamespace(
+            payload={
+                "messages": [{"role": "user", "content": "Show revenue"}],
+                "database_name": "finance_prod",
+            }
+        )
+        assert _extract_database_name_from_request_metadata(metadata) == "finance_prod"
+
+    def test_extract_database_name_from_object_payload(self):
+        payload = SimpleNamespace(
+            database_name="finance_prod",
+            messages=[SimpleNamespace(role="user", content="Show revenue")],
+            data_sources=None,
+            active_report_job_id=None,
+        )
+
+        assert _extract_query_context(payload).database_name == "finance_prod"
+
+    def test_dynamic_attribute_payload_yields_no_database_scope(self):
+        payload = MagicMock()
+        payload.messages = [SimpleNamespace(role="user", content="Show revenue")]
+        payload.data_sources = None
+        payload.active_report_job_id = None
+
+        assert _extract_query_context(payload).database_name is None
+
+    @pytest.mark.parametrize("database_name", ["", "finance bad", "finance/other", "x" * 129])
+    def test_invalid_database_name_is_rejected(self, database_name):
+        with pytest.raises(ValidationError):
+            _extract_query_context(
+                {
+                    "database_name": database_name,
+                    "content": {"messages": [{"role": "user", "content": "Show revenue"}]},
+                }
+            )

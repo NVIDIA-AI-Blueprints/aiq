@@ -7,6 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 
 The AI-Q blueprint is configured through a single YAML file that defines LLMs, tools, agents, and the workflow. The NeMo Agent Toolkit reads this file at startup and wires everything together.
 
+```{note}
+The NVIDIA API Catalog serving profile for Nemotron 3.5 Lightning has a known shallow citation-output limitation.
+AI-Q fails closed rather than publishing citation-incomplete drafts. See
+[Troubleshooting](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog) before using this hosted
+profile for shallow research.
+```
+
 ## Config File Structure
 
 Every config file has four top-level sections:
@@ -49,11 +56,6 @@ general:
       console:
         _type: console
         level: INFO          # DEBUG, INFO, WARNING, ERROR
-    tracing:
-      phoenix:               # Optional: Phoenix observability
-        _type: phoenix
-        endpoint: http://localhost:6006/v1/traces
-        project: dev
   front_end:                 # Only for web/API mode
     _type: aiq_api
     runner_class: aiq_api.plugin.AIQAPIWorker
@@ -72,13 +74,13 @@ general:
 | `use_uvloop` | `bool` | `false` | Enable uvloop for improved async I/O performance. Recommended for web mode. |
 | `telemetry.logging.console._type` | `str` | `console` | Logging backend type. |
 | `telemetry.logging.console.level` | `str` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
-| `telemetry.tracing` | `object` | -- | Optional tracing configuration (Phoenix, OpenTelemetry). |
 | `front_end._type` | `str` | -- | Front-end type. Use `aiq_api` for the web API server. Omit for CLI mode. |
 | `front_end.db_url` | `str` | `sqlite+aiosqlite:///./jobs.db` | Database URL for async job persistence. |
 | `front_end.expiry_seconds` | `int` | `86400` | How long completed jobs remain in the database (seconds). |
 | `front_end.cors` | `object` | -- | CORS settings for the API server. |
 
-For `aiq_api`, request tag enrichment for NAT-exported spans is configured via
+Tracing is configured through `workflow.relay`, not `general.telemetry`.
+For `aiq_api`, request tag enrichment for Relay-exported spans is configured via
 environment variables rather than YAML fields. Refer to `frontends/aiq_api/README.md`
 and the [Observability](../deployment/observability.md) guide for:
 
@@ -92,32 +94,34 @@ and the [Observability](../deployment/observability.md) guide for:
 
 ## `llms` Section
 
-Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_super_llm`) that agents reference.
+Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_ultra_llm`) that agents reference.
 
 ```yaml
 llms:
-  nemotron_super_llm:
+  nemotron_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1
-    top_p: 0.3
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
     max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `_type` | `str` | **required** | LLM provider type. Use `nim` for NVIDIA NIM endpoints, `openai` for OpenAI-compatible endpoints. |
-| `model_name` | `str` | **required** | Model identifier (for example, `nvidia/nemotron-3-super-120b-a12b`, `azure/openai/gpt-4.1-mini`). |
+| `model_name` | `str` | **required** | Model identifier (for example, `nvidia/nemotron-3-ultra-550b-a55b`, `azure/openai/gpt-4.1-mini`). |
 | `base_url` | `str` | `None` | API endpoint URL. Should always be set explicitly for NVIDIA NIM endpoints. |
 | `api_key` | `str` | -- | API key. If omitted, uses `NVIDIA_API_KEY` from the environment. |
 | `temperature` | `float` | `None` | Sampling temperature. Lower values produce more deterministic output. When `None`, the API uses its server-side default. |
 | `top_p` | `float` | `None` | Nucleus sampling threshold. When `None`, the API uses its server-side default. |
 | `max_tokens` | `int` | `300` | Maximum tokens in the response. Set higher values (for example, `16384` or `128000`) for research agents. |
 | `num_retries` | `int` | `5` | Number of retry attempts on API failure. |
+| `parallel_tool_calls` | `bool` | Provider default | Whether the provider can emit parallel tool calls. The default intent and shallow profiles set this to `false`. |
 | `chat_template_kwargs` | `object` | -- | Extra arguments passed to the chat template. Use `enable_thinking: true` to activate the model's chain-of-thought reasoning. |
 
 ### Common LLM Configurations
@@ -126,10 +130,11 @@ Different agents benefit from different parameter profiles:
 
 | Role | Temperature | Top-p | Max Tokens | Notes |
 |------|------------|-------|------------|-------|
-| Intent classifier | `0.5` | `0.9` | `4096` | Moderate creativity for classification |
-| Shallow researcher | `0.1` | `0.3` | `16384` | Low temperature for factual accuracy |
-| Deep research orchestrator | `1.0` | `1.0` | `128000` | High temperature with thinking enabled for deep reasoning |
-| Summary LLM | `0.3` | -- | `100` | Conservative, short output for document summaries |
+| Intent classifier (Nemotron 3.5 Lightning) | `0.1` | `0.9` | `1024` | Short deterministic classification; thinking disabled |
+| Shallow researcher (Nemotron 3.5 Lightning) | `0.2` | `0.7` | `8192` | Tool-calling profile; parallel tool calls disabled and thinking enabled |
+| Deep research roles (Ultra) | `0.2` | `0.7` | `16384` | Source routing, orchestration, planning, and research |
+| Deep research writer (Ultra) | `0.2` | `0.7` | `32768` | Larger report-writing budget |
+| Summary LLM (Gemma) | `0.1` | -- | `100` | Conservative, short document summaries |
 
 ---
 
@@ -329,7 +334,7 @@ functions:
     opensearch_aws_service: ${OPENSEARCH_AWS_SERVICE:-aoss}
     opensearch_index_prefix: ${OPENSEARCH_INDEX_PREFIX:-aiq}
     opensearch_ingestion_mode: ${OPENSEARCH_INGESTION_MODE:-auto}
-    embed_model: ${AIQ_EMBED_MODEL:-nvidia/llama-nemotron-embed-vl-1b-v2}
+    embed_model: ${AIQ_EMBED_MODEL:-nvidia/nemotron-3-embed-1b}
 ```
 
 | Parameter | Type | Default | Description |
@@ -362,7 +367,7 @@ functions:
 | `opensearch_ingestion_mode` | `str` | `local` | Ingestion executor: `local`, `dask`, or `auto`. `auto` uses Dask only when a scheduler address is configured. |
 | `opensearch_dask_scheduler_address` | `str` | `None` | Dask scheduler for distributed ingestion. Also reads `NAT_DASK_SCHEDULER_ADDRESS`. |
 | `opensearch_dask_file_transfer` | `str` | `bytes` | Send uploads to Dask workers as `bytes` or shared filesystem `paths`. |
-| `embed_model` | `str` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model for OpenSearch and Azure AI Search ingestion and retrieval. |
+| `embed_model` | `str` | `nvidia/nemotron-3-embed-1b` | Embedding model for OpenSearch and Azure AI Search ingestion and retrieval. |
 | `embed_base_url` | `str` | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible embeddings endpoint for OpenSearch and Azure AI Search. |
 
 Refer to [Knowledge Layer](./knowledge-layer.md) for backend selection and the
@@ -376,11 +381,10 @@ Classifies user queries as meta (conversational) or research, and determines res
 functions:
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_lightning_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
-    verbose: true
     llm_timeout: 90
 ```
 
@@ -388,7 +392,6 @@ functions:
 |-----------|------|---------|-------------|
 | `llm` | `str` | **required** | Reference to an LLM defined in `llms` section. |
 | `tools` | `list[str]` | `[]` | Tool references passed to the intent prompt for tool-awareness. |
-| `verbose` | `bool` | `false` | Enable verbose logging with trace callbacks. |
 | `llm_timeout` | `float` | `90` | Timeout in seconds for the intent classification LLM call. |
 
 ### `clarifier_agent`
@@ -404,7 +407,6 @@ functions:
       - web_search_tool
     max_turns: 3
     log_response_max_chars: 2000
-    verbose: true
 ```
 
 | Parameter | Type | Default | Description |
@@ -414,11 +416,10 @@ functions:
 | `exclude_tools` | `list[str]` | `[]` | Tool names to exclude when inheriting from the data source registry. |
 | `max_turns` | `int` | `3` | Maximum number of clarification Q&A turns before auto-completing. |
 | `log_response_max_chars` | `int` | `2000` | Maximum characters to log from LLM responses. |
-| `verbose` | `bool` | `false` | Enable verbose logging. |
 
 ### `shallow_research_agent`
 
-Fast, single-pass research agent that produces citation-backed answers in one tool-calling loop.
+Fast, single-pass research agent that attempts to produce citation-backed answers in one tool-calling loop.
 
 ```yaml
 functions:
@@ -430,6 +431,7 @@ functions:
       - knowledge_search
     max_llm_turns: 10
     max_tool_iterations: 5
+    enforce_citations: false
     verbose: true
 ```
 
@@ -439,6 +441,7 @@ functions:
 | `tools` | `list[str]` | `[]` | Search tools available to the agent. |
 | `max_llm_turns` | `int` | `10` | Maximum number of LLM turns (includes both reasoning and tool-calling steps). |
 | `max_tool_iterations` | `int` | `5` | Maximum tool-calling iterations before forcing synthesis. |
+| `enforce_citations` | `bool` | `false` | Fail the run when citation integrity cannot be preserved. When `false`, AI-Q returns the generated answer after sanitization instead of failing solely on the citation contract. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |
 
 ### `deep_research_agent`
@@ -451,11 +454,11 @@ batches those queries for researcher workers and delegates final synthesis to th
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
-    source_router_llm: nemotron_super_llm
-    researcher_llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
-    writer_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     # tools omitted -> inherit every tool in data_source_registry
     exclude_tools:
       - web_search_tool
@@ -466,6 +469,7 @@ functions:
     # skills: deep_research_skills
     # sandbox: deep_research_sandbox
     max_research_concurrency: 6
+    max_researcher_model_calls: 100
     max_concurrent_source_tool_calls: 5
     max_source_tool_batch_size: 4
     resource_limits:
@@ -484,7 +488,6 @@ functions:
       max_todo_items: 20
       max_todo_item_chars: 2048
       max_total_todo_chars: 10000
-    verbose: true
 ```
 
 | Parameter | Type | Default | Description |
@@ -502,10 +505,10 @@ functions:
 | `skills` | object or function ref | `None` | Inline `deep_research_skills` config or a reference to a config-only function of that type. Skill assignments are keyed by `researcher-agent` and `writer-agent`. |
 | `sandbox` | object or function ref | `None` | Inline `deep_research_sandbox` config or a reference to a config-only function of that type. Enables the DeepAgents execution backend. |
 | `max_research_concurrency` | `int` | `6` | Maximum `ResearchQuery` objects accepted and run concurrently by one `run_research_batch` call. |
+| `max_researcher_model_calls` | `int` | `100` | Maximum normal model turns per researcher worker before one tools-disabled finalization turn. |
 | `max_concurrent_source_tool_calls` | `int` | `5` | Shared cap on concurrent source-tool calls across all researcher workers in the run. |
 | `max_source_tool_batch_size` | `int` | `4` | Maximum concrete inputs accepted by a batch-capable source-tool wrapper in one call. |
 | `resource_limits` | object | See below | Non-disableable per-job request, graph, state, and provider-call ceilings. Values may be reduced but cannot exceed the defaults. |
-| `verbose` | `bool` | `true` | Enable verbose logging. |
 
 `resource_limits` is enforced in both synchronous and async-job construction:
 
@@ -537,6 +540,16 @@ ordered `preferred_tools` and `fallback_tools` guidance on each `ResearchQuery`;
 request-filtered callable set. Refer to [Tools and Sources](./tools-and-sources.md#automatic-source-routing) and the
 [`config_domain_routing_and_skills.yml`](../../../configs/config_domain_routing_and_skills.yml) reference profile.
 
+```{note}
+**Migration: `chart-generation` moved to the `visualization` collection.** The built-in
+`chart-generation` skill previously lived in the `research` collection; it now lives in its own
+`visualization` collection, and charts are no longer sandbox-gated. The `visualization` skill ships
+enabled only in the skills and sandbox example configs (`config_domain_routing_and_skills.yml` and
+`config_openshell.yml`); every other shipped config presents chart-worthy data as a Markdown table.
+A writer that wants inline charts must be assigned the `visualization` collection in its
+`deep_research_skills` assignment.
+```
+
 ---
 
 ## `workflow` Section
@@ -550,9 +563,31 @@ workflow:
   enable_clarifier: true
   use_async_deep_research: true
   max_history: 20
-  verbose: true
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
+  relay:
+    logging: true
+    observability:
+      enable_full_payloads: true
+      atof: {enabled: true, output_directory: ./relay, filename: aiq-relay.atof.jsonl, mode: append}
+      opentelemetry:
+        enabled: false
+        endpoints:
+          - type: openinference
+            endpoint: "${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}"
+            service_name: aiq-relay
+            resource_attributes: {openinference.project.name: aiq-relay}
+    redaction:
+      enabled: true
+      request_privacy_attributes: [data, category_profile]
 ```
+
+The default pricing source list is empty, so default configs omit the pricing
+block and do not load a catalog. The dedicated
+`configs/nemo_relay/config_web_default_with_pricing.yml` example loads
+deployment-specific rates from `configs/nemo_relay/relay_pricing_catalog.json`.
+Its zero-dollar Nemotron entries describe the NVIDIA-hosted access path used by
+the example; they are not estimates for self-hosted infrastructure. Review the
+catalog when the provider offer or deployment changes.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -561,8 +596,11 @@ workflow:
 | `enable_clarifier` | `bool` | `true` | Run the clarifier agent before deep research to gather user requirements. |
 | `use_async_deep_research` | `bool` | `false` | Submit deep research as an async background job (requires [Dask](https://www.dask.org/) scheduler). |
 | `max_history` | `int` | `20` | Maximum number of messages to keep in conversation history before trimming. |
-| `verbose` | `bool` | `false` | Enable verbose logging. |
 | `checkpoint_db` | `str` | `./checkpoints.db` | SQLite path or PostgreSQL DSN for persistent conversation checkpoints. |
+| `relay` | `object` | enabled defaults | NeMo Relay logging, Observability v3 ATOF/OTEL destinations, PII redaction, and pricing sources. Relay instrumentation itself has no workflow disable switch. See [Observability with NeMo Relay](../deployment/observability.md). |
+
+Relay configuration is strict: unknown nested fields and invalid OTLP endpoint
+URLs fail workflow validation instead of being silently ignored.
 
 > **Note:** `interactive_auth` is a YAML-level field consumed by the CLI entry point (`start_cli.sh` / `aiq-research`), not a Pydantic field on `ChatDeepResearcherConfig`. It can be set in YAML config files but is not part of the workflow config class.
 
@@ -585,38 +623,55 @@ general:
 
 # LLM definitions
 llms:
-  intent_llm:                          # Used by intent classifier
+  lightning_intent_llm:                # Used by intent classifier
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
     top_p: 0.9
-    max_tokens: 4096
+    max_tokens: 1024
     num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
+
+  lightning_agent_llm:                 # Used by shallow researcher
+    _type: nim
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 8192
+    num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
       enable_thinking: true
 
-  research_llm:                        # Used by shallow researcher + clarifier
+  ultra_llm:                           # Used by clarifier and deep research
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1
-    top_p: 0.3
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
     max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
-  deep_llm:                            # Used by deep research orchestrator
+  ultra_writer_llm:                    # Used by deep research writer
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
 # Tools and agents
 functions:
@@ -637,22 +692,21 @@ functions:
 
   intent_classifier:                   # Classifies queries, routes depth
     _type: intent_classifier
-    llm: intent_llm
+    llm: lightning_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
 
   clarifier_agent:                     # Asks clarifying questions for deep research
     _type: clarifier_agent
-    llm: research_llm
+    llm: ultra_llm
     tools:
       - web_search_tool
     max_turns: 3
-    verbose: true
 
   shallow_research_agent:              # Fast single-pass research
     _type: shallow_research_agent
-    llm: research_llm
+    llm: lightning_agent_llm
     tools:
       - web_search_tool
     max_llm_turns: 10
@@ -660,10 +714,11 @@ functions:
 
   deep_research_agent:                 # Multi-phase deep research
     _type: deep_research_agent
-    orchestrator_llm: deep_llm
-    researcher_llm: research_llm
-    source_router_llm: research_llm
-    writer_llm: deep_llm
+    orchestrator_llm: ultra_llm
+    researcher_llm: ultra_llm
+    source_router_llm: ultra_llm
+    planner_llm: ultra_llm
+    writer_llm: ultra_writer_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
@@ -689,7 +744,7 @@ only the additional sections you need.
 | `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
 | `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |
 | `configs/config_web_opensearch.yml` | Web API | Built-in OpenSearch knowledge backend plus Tavily. Supports unauthenticated or basic self-hosted OpenSearch and SigV4 (`es` or `aoss`); infrastructure and credentials are deployment opt-ins. |
-| `configs/config_frontier_models.yml` | Web API | LlamaIndex plus explicit per-agent tools, Nemotron researcher roles, and an OpenAI frontier model for orchestration/planning/writing. Requires `OPENAI_API_KEY`; paper search is commented out. |
+| `configs/config_frontier_models.yml` | Web API | Shipped LlamaIndex frontier profile: GPT-5.6 Luna for intent/shallow/source routing/research, GPT-5.6 Sol for clarification/orchestration/planning/writing, and Gemma 4 for summaries. Requires `NVIDIA_API_KEY`, `OPENAI_API_KEY`, and `TAVILY_API_KEY` for the enabled Tavily tools; the commented paper-search opt-in requires `SERPER_API_KEY` when enabled. Validate the complete workflow against the configured provider endpoints before deployment. |
 | `configs/config_web_default_guardrails.yml` | Web API | LlamaIndex with workflow Guardrails attached explicitly, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
 | `configs/config_web_frag_mcp_auth.yml` | Web API | Foundational RAG plus a protected per-user OAuth MCP source example. Requires a real protected MCP endpoint and shared token-store configuration; it is not a zero-config default. |
 | `configs/config_domain_routing_and_skills.yml` | Direct deep-research workflow | Automatic domain routing, Tavily, DuckDuckGo news, Polymarket, LlamaIndex, enabled Serper paper search, built-in skills, and a Modal sandbox. Requires the corresponding service credentials and Modal setup. |

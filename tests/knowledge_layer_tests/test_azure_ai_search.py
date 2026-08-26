@@ -417,7 +417,7 @@ def test_shared_embedding_defaults_match_adapter(monkeypatch):
 
     assert str(config.embed_base_url) == "https://integrate.api.nvidia.com/v1"
     assert adapter_config.embed_base_url == "https://integrate.api.nvidia.com/v1"
-    assert config.embed_model == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    assert config.embed_model == "nvidia/nemotron-3-embed-1b"
     assert config.embed_dim == 2048
     assert adapter_config.embed_model == config.embed_model
     assert adapter_config.embed_dim == config.embed_dim
@@ -598,6 +598,8 @@ def test_shared_formatter_retains_source_and_citation_lines():
 
     assert "Source: report.pdf" in formatted
     assert "Citation: report.pdf, p.3" in formatted
+    assert "Relevance Score: 0.00" in formatted
+    assert "Vector Distance:" not in formatted
 
 
 @pytest.mark.asyncio

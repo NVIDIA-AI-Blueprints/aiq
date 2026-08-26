@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -33,7 +34,9 @@ async def test_report_rewriter_uses_parent_report_context_and_emits_output_file(
     writer_llm = FakeWriterLLM()
     provider = LLMProvider()
     provider.configure(LLMRole.REPORT_WRITER, writer_llm)
-    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+    callback = MagicMock()
+    duplicate_callback = MagicMock()
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[], callbacks=[callback, duplicate_callback])
 
     state = ReportRewriterAgentState(
         messages=[HumanMessage(content="Remove the appendix.")],
@@ -52,6 +55,8 @@ async def test_report_rewriter_uses_parent_report_context_and_emits_output_file(
     assert "# Parent Report" in rendered_prompt
     assert "Remove the appendix." in rendered_prompt
     assert "complete standalone Markdown report" in rendered_prompt
+    callback.emit_final_report.assert_called_once_with("# Revised Report\n\nUpdated body.", cited_urls=[])
+    duplicate_callback.emit_final_report.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -89,7 +94,8 @@ async def test_report_rewriter_verifies_and_sanitizes_revised_report_against_par
     )
     provider = LLMProvider()
     provider.configure(LLMRole.REPORT_WRITER, writer_llm)
-    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+    callback = MagicMock()
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[], callbacks=[callback])
 
     parent_context = {
         "parent_job_id": "parent-job",
@@ -119,6 +125,10 @@ async def test_report_rewriter_verifies_and_sanitizes_revised_report_against_par
     assert "[2]" not in revised_report
     assert "Unsupported claim." in revised_report
     assert result.messages[-1].content == revised_report
+    callback.emit_final_report.assert_called_once_with(
+        revised_report,
+        cited_urls=["https://valid.example/source"],
+    )
 
 
 @pytest.mark.asyncio

@@ -114,11 +114,19 @@ Here is a complete configuration example showing how to integrate the paper sear
 
 ```yaml
 llms:
-  my_llm:
+  nemotron_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
+    temperature: 0.2
+    max_tokens: 16384
+
+  nemotron_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.2
+    max_tokens: 32768
 
 functions:
   paper_search_tool:
@@ -133,9 +141,11 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    llm: my_llm
-    report_llm: my_llm
-    max_loops: 2
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     tools:
       - paper_search_tool
       - web_search_tool

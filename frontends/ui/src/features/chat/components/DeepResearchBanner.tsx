@@ -65,7 +65,6 @@ const getBannerConfig = (
 
   switch (bannerType) {
     case 'success': {
-      // Build stats suffix for success banner
       const statsParts: string[] = []
       if (stats?.totalTokens && stats.totalTokens > 0) {
         statsParts.push(`${formatTokens(stats.totalTokens)} tokens`)
@@ -131,8 +130,6 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   const { loadResearchPanelTab } = useLoadJobData()
   const config = getBannerConfig(bannerType, jobId, { totalTokens, toolCallCount })
 
-  // Job is complete if banner type indicates completion (success, failure, cancelled, expired)
-  // 'starting' banner means job is still in progress - don't try to load archived data
   const isJobComplete = bannerType !== 'starting'
 
   const handleButtonClick = useCallback(async () => {
@@ -146,7 +143,6 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
 
     setResearchPanelTab(buttonTab)
     openRightPanel('research')
-    // For incomplete jobs (starting), the live SSE connection is already populating data
   }, [
     config.buttonTab,
     openRightPanel,
@@ -156,8 +152,6 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
     isJobComplete,
   ])
 
-  // Keep archived/error-state banners informational. The report CTA is the
-  // only banner action we keep visible to avoid competing recovery paths.
   const actions =
     bannerType === 'success' && config.buttonText ? (
       <Button

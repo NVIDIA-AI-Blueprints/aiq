@@ -18,11 +18,12 @@ import { useAuth } from '@/adapters/auth'
 import { MainLayout } from '@/features/layout'
 
 const HomeContent = (): ReactNode => {
-  const { user, isAuthenticated, authRequired, signIn, signOut } = useAuth()
+  const { user, isAuthenticated, isLoading, authRequired, signIn, signOut } = useAuth()
 
   return (
     <MainLayout
       isAuthenticated={isAuthenticated}
+      isLoading={isLoading}
       authRequired={authRequired}
       user={
         isAuthenticated

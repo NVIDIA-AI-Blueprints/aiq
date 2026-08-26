@@ -114,7 +114,7 @@ Use `exclude_tools` to specialize individual agents:
 functions:
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: nemotron_lightning_agent_llm
     exclude_tools:
       - mcp_financial_tools__expensive_long_running_tool
 ```

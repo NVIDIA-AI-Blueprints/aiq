@@ -361,6 +361,41 @@ async def test_invalid_classifier_shape_defaults_to_shallow_research() -> None:
         await manager.stop()
 
 
+@pytest.mark.parametrize("serialized", [False, True], ids=("typed", "serialized"))
+@pytest.mark.asyncio
+async def test_submit_rejects_failed_classification_before_job_creation(serialized: bool) -> None:
+    class _FailedClassifier(_Runner):
+        async def classify(self, query: str) -> dict[str, Any]:
+            del query
+            self.classify_calls += 1
+            failure = WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+            return {
+                "user_intent": IntentResult(intent="meta", target="meta"),
+                "messages": [AIMessage(content="Please try again.")],
+                "workflow_outcome": failure.model_dump() if serialized else failure,
+            }
+
+    runner = _FailedClassifier()
+    store = _MemoryJobStore()
+    manager = JobManager(
+        runner,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+    )
+    await manager.start()
+    try:
+        with pytest.raises(RuntimeError, match="Intent classification failed"):
+            await manager.submit("question", "anonymous")
+    finally:
+        await manager.stop()
+
+    assert runner.classify_calls == 1
+    assert runner.run_calls == []
+    assert store.jobs == {}
+    assert manager._active_tasks == {}
+
+
 @pytest.mark.asyncio
 async def test_deep_job_uses_job_id_as_conversation_and_fixed_poll_cadence() -> None:
     gate = asyncio.Event()

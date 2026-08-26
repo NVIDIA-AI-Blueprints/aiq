@@ -6,10 +6,10 @@
  *
  * The main application layout container that orchestrates:
  * - AppBar (top)
- * - SessionsPanel (left, overlay)
+ * - SessionsPanel (left, collapsible push rail)
  * - ChatArea + InputArea (center, responsive width)
- * - ResearchPanel (right, pushes content - takes 60% when open)
- * - DataSourcesPanel (right, overlay)
+ * - ResearchPanel (right, pushes content)
+ * - DataSourcesPanel (right, push panel)
  *
  * Handles auth state to show different UI for logged-in vs logged-out users.
  */
@@ -19,7 +19,6 @@
 import { type FC, useCallback, useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { Flex } from '@/adapters/ui'
-import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { AppBar } from './AppBar'
 import { SessionsPanel } from './SessionsPanel'
 import { ChatArea } from './ChatArea'
@@ -31,6 +30,7 @@ import {
   hasActiveDeepResearchJob,
   hasCompletedDeepResearchReport,
   hasExpiredDeepResearchReport,
+  sortConversationsByLastUserMessage,
 } from '@/features/chat/lib/session-activity'
 import { useLayoutStore } from '../store'
 import { useSessionUrl } from '@/hooks/use-session-url'
@@ -38,6 +38,8 @@ import { useSessionUrl } from '@/hooks/use-session-url'
 interface MainLayoutProps {
   /** Whether the user is authenticated */
   isAuthenticated?: boolean
+  /** Whether the initial auth/session bootstrap is still loading */
+  isLoading?: boolean
   /** Whether authentication is required (false = using default user) */
   authRequired?: boolean
   /** User information for AppBar */
@@ -59,6 +61,7 @@ interface MainLayoutProps {
  */
 export const MainLayout: FC<MainLayoutProps> = ({
   isAuthenticated = false,
+  isLoading = false,
   authRequired = false,
   user,
   onSignIn,
@@ -90,9 +93,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const deleteAllConversations = useChatStore((s) => s.deleteAllConversations)
   const updateConversationTitle = useChatStore((s) => s.updateConversationTitle)
 
-  const isResearchPanelOpen = useLayoutStore((s) => s.rightPanel === 'research')
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
-  const prefersReducedMotion = useReducedMotion()
 
   // Deep research SSE hook - manages connection when deep research starts
   useDeepResearch()
@@ -140,7 +141,10 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const isNavigationBlocked = isStreaming || pendingInteraction !== null
 
   const userConversations = useMemo(
-    () => (currentUserId ? conversations.filter((c) => c.userId === currentUserId) : []),
+    () =>
+      sortConversationsByLastUserMessage(
+        currentUserId ? conversations.filter((c) => c.userId === currentUserId) : []
+      ),
     [conversations, currentUserId]
   )
 
@@ -173,18 +177,25 @@ export const MainLayout: FC<MainLayoutProps> = ({
         onSignOut={onSignOut}
       />
 
-      {/* Main Content Area - using explicit widths instead of flex for smoother animation */}
+      {/* Main content area: in-flow panels reflow the center column (push, not overlay) */}
       <div className="relative flex flex-1 overflow-hidden">
-        {/* Center Content: Chat + Input - Responsive to research panel */}
-        <div
-          className="flex flex-col overflow-hidden"
-          style={{
-            width: isResearchPanelOpen ? '40%' : '100%',
-            transition: prefersReducedMotion ? 'none' : 'width 600ms ease-in-out',
-          }}
-        >
+        {/* Sessions Panel (Left) - collapsible push rail, only when authenticated */}
+        {isAuthenticated && (
+          <SessionsPanel
+            sessions={sessions}
+            selectedSessionId={currentConversation?.id}
+            onSelectSession={handleSelectSession}
+            onNewSession={handleNewSession}
+            onDeleteSession={handleDeleteSession}
+            onDeleteAllSessions={handleDeleteAllSessions}
+            onRenameSession={updateConversationTitle}
+          />
+        )}
+
+        {/* Center Content: Chat + Input */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           {/* Chat Area - Scrollable */}
-          <ChatArea isAuthenticated={isAuthenticated} onSignIn={onSignIn} />
+          <ChatArea isAuthenticated={isAuthenticated} isLoading={isLoading} onSignIn={onSignIn} />
 
           {/* No sources warning - shown when no data sources or files available */}
           <NoSourcesBanner isAuthenticated={isAuthenticated} />
@@ -194,25 +205,12 @@ export const MainLayout: FC<MainLayoutProps> = ({
           <InputArea isAuthenticated={isAuthenticated} connectionMode="websocket" />
         </div>
 
-        {/* Research Panel (Right) - Pushes content, takes 60% width */}
+        {/* Data Sources Panel (Right) - push panel */}
+        {isAuthenticated && <DataSourcesPanel />}
+
+        {/* Research Panel (Right) - pushes content */}
         <ResearchPanel isAuthenticated={isAuthenticated} />
       </div>
-
-      {/* Overlay Panels - These slide over the content */}
-
-      {/* Sessions Panel (Left) - Only functional when authenticated */}
-      <SessionsPanel
-        sessions={sessions}
-        selectedSessionId={currentConversation?.id}
-        onSelectSession={handleSelectSession}
-        onNewSession={handleNewSession}
-        onDeleteSession={handleDeleteSession}
-        onDeleteAllSessions={handleDeleteAllSessions}
-        onRenameSession={updateConversationTitle}
-      />
-
-      {/* Data Sources Panel (Right) - Overlay */}
-      {isAuthenticated && <DataSourcesPanel />}
     </Flex>
   )
 }

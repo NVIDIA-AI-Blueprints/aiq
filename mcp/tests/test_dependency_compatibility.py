@@ -28,7 +28,7 @@ def test_runtime_dependency_versions_are_the_validated_compatibility_baseline() 
     assert version("nvidia-nat") == "1.8.0"
     assert version("nvidia-nat-core") == "1.8.0"
     assert version("aiq-agent") == "2.2.0"
-    assert version("cryptography") == "48.0.1"
+    assert version("cryptography") == "50.0.0"
 
 
 def test_mcp_protocol_version_is_explicitly_supported() -> None:

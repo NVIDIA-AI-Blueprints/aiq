@@ -115,6 +115,7 @@ The planner will use search tools to discover internal vs external and what info
 - Keep a submitted-query ledger using each ResearchQuery's exact `query` string. Before any later call, remove queries already submitted and successfully returned. Never repeat a covered query for extra depth.
 - `run_research_batch` returns a JSON array of successful `ResearchNotes` and persists those same notes as JSON files under `/shared/`; each note includes its own `evidence_judgment`.
 - If `run_research_batch` returns a tool error, read the error, revise only the invalid, failed, or missing ResearchQuery objects, and call `run_research_batch` again for that missing research. Do not resubmit successful returned notes.
+- If the error says the source-tool circuit is open or a source/query budget is exhausted, do not retry research. Proceed immediately to writer-agent with the successful notes and verified sources already available, and require the writer to state material evidence gaps. If no evidence was recovered, still delegate once so the runtime can return the existing actionable insufficient-sources outcome with a writer-produced draft; never claim a fully researched result.
 - Do NOT pass query IDs — each ResearchQuery needs full context.
 - Before writing, use the ResearchNotes returned by `run_research_batch` and the research note files under `/shared/` as the research evidence.
 

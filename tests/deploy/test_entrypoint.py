@@ -1,14 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Security invariants for the embedded Dask deployment entrypoint."""
+"""Deployment entrypoint invariants for embedded and shared Dask modes."""
 
 from __future__ import annotations
 
 import importlib.util
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
+from unittest.mock import call
 
+import pytest
 from distributed import Client
 from distributed import LocalCluster
 
@@ -70,6 +73,157 @@ def test_embedded_dask_worker_can_disable_lifetime_restart() -> None:
     assert "--lifetime" in command
     assert "--lifetime-restart" not in command
     assert "--memory-limit" not in command
+
+
+def test_worker_and_web_processes_receive_scheduler_address(monkeypatch) -> None:
+    entrypoint = _load_entrypoint()
+    processes = [MagicMock(), MagicMock(), MagicMock()]
+    for process in processes:
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+    popen = MagicMock(side_effect=processes)
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.setattr(entrypoint.subprocess, "Popen", popen)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", MagicMock())
+    monkeypatch.setattr(entrypoint, "_install_signal_handlers", MagicMock())
+    monkeypatch.setattr(entrypoint.time, "sleep", MagicMock())
+
+    assert entrypoint.main() == 0
+
+    expected_address = f"tcp://{entrypoint._DASK_LOOPBACK_HOST}:8786"
+    worker_env = popen.call_args_list[1].kwargs["env"]
+    web_env = popen.call_args_list[2].kwargs["env"]
+    assert worker_env["NAT_DASK_SCHEDULER_ADDRESS"] == expected_address
+    assert web_env["NAT_DASK_SCHEDULER_ADDRESS"] == expected_address
+
+
+def test_external_scheduler_starts_only_web_server(monkeypatch) -> None:
+    entrypoint = _load_entrypoint()
+    scheduler_address = "tls://aiq-dask-scheduler:8786"
+    wait_for_scheduler = MagicMock()
+    run_web_server = MagicMock(return_value=17)
+    popen = MagicMock(side_effect=AssertionError("external mode must not launch local Dask processes"))
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", scheduler_address)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", wait_for_scheduler)
+    monkeypatch.setattr(entrypoint, "_run_web_server", run_web_server)
+    monkeypatch.setattr(entrypoint.subprocess, "Popen", popen)
+
+    assert entrypoint.main() == 17
+    wait_for_scheduler.assert_called_once_with(scheduler_address)
+    run_web_server.assert_called_once_with()
+    popen.assert_not_called()
+
+
+def test_external_scheduler_rejects_plaintext_address(monkeypatch) -> None:
+    entrypoint = _load_entrypoint()
+    wait_for_scheduler = MagicMock()
+    run_web_server = MagicMock()
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", "tcp://aiq-dask-scheduler:8786")
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", wait_for_scheduler)
+    monkeypatch.setattr(entrypoint, "_run_web_server", run_web_server)
+
+    with pytest.raises(SystemExit, match="must use tls://"):
+        entrypoint.main()
+
+    wait_for_scheduler.assert_not_called()
+    run_web_server.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "scheduler_address",
+    (
+        "tls://",
+        "tls://scheduler",
+        "tls://:8786",
+        "tls://scheduler:",
+        "tls://scheduler:not-a-port",
+        "tls://scheduler:0",
+    ),
+)
+def test_external_scheduler_rejects_incomplete_tls_address(monkeypatch, scheduler_address: str) -> None:
+    entrypoint = _load_entrypoint()
+    wait_for_scheduler = MagicMock()
+    run_web_server = MagicMock()
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", scheduler_address)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", wait_for_scheduler)
+    monkeypatch.setattr(entrypoint, "_run_web_server", run_web_server)
+
+    with pytest.raises(SystemExit, match="must include a valid host and port"):
+        entrypoint.main()
+
+    wait_for_scheduler.assert_not_called()
+    run_web_server.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "scheduler_address",
+    (
+        "tls://user@scheduler:8786",
+        "tls://user:password@scheduler:8786",  # pragma: allowlist secret
+        "tls://scheduler:8786/path",
+        "tls://scheduler:8786?option=value",
+        "tls://scheduler:8786#fragment",
+    ),
+)
+def test_external_scheduler_rejects_additional_url_components(monkeypatch, scheduler_address: str) -> None:
+    entrypoint = _load_entrypoint()
+    wait_for_scheduler = MagicMock()
+    run_web_server = MagicMock()
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", scheduler_address)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", wait_for_scheduler)
+    monkeypatch.setattr(entrypoint, "_run_web_server", run_web_server)
+
+    with pytest.raises(SystemExit, match="must not include userinfo, path, query, or fragment"):
+        entrypoint.main()
+
+    wait_for_scheduler.assert_not_called()
+    run_web_server.assert_not_called()
+
+
+def test_worker_startup_failure_cleans_up_scheduler(monkeypatch) -> None:
+    entrypoint = _load_entrypoint()
+    scheduler_proc = MagicMock()
+    popen = MagicMock(side_effect=[scheduler_proc, OSError("worker startup failed")])
+    terminate_process = MagicMock()
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.delenv("NAT_DASK_SCHEDULER_ADDRESS", raising=False)
+    monkeypatch.setattr(entrypoint.subprocess, "Popen", popen)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", MagicMock())
+    monkeypatch.setattr(entrypoint, "_terminate_process", terminate_process)
+
+    with pytest.raises(OSError, match="worker startup failed"):
+        entrypoint.main()
+
+    assert popen.call_count == 2
+    terminate_process.assert_called_once_with(scheduler_proc)
+
+
+def test_web_startup_failure_cleans_up_local_dask(monkeypatch) -> None:
+    entrypoint = _load_entrypoint()
+    scheduler_proc = MagicMock()
+    worker_proc = MagicMock()
+    popen = MagicMock(side_effect=[scheduler_proc, worker_proc, OSError("web startup failed")])
+    terminate_process = MagicMock()
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.delenv("NAT_DASK_SCHEDULER_ADDRESS", raising=False)
+    monkeypatch.setattr(entrypoint.subprocess, "Popen", popen)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", MagicMock())
+    monkeypatch.setattr(entrypoint, "_terminate_process", terminate_process)
+    monkeypatch.setattr(entrypoint.time, "sleep", MagicMock())
+
+    with pytest.raises(OSError, match="web startup failed"):
+        entrypoint.main()
+
+    assert popen.call_count == 3
+    assert terminate_process.call_args_list == [
+        call(None),
+        call(worker_proc),
+        call(scheduler_proc),
+    ]
 
 
 def test_embedded_dask_worker_advertises_only_loopback() -> None:

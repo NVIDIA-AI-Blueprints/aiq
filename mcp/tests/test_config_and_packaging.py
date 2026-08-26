@@ -22,6 +22,14 @@ _ROOT_MANIFEST_PATH = _REPO_ROOT / "pyproject.toml"
 _MCP_LOCK_PATH = _REPO_ROOT / "mcp" / "uv.lock"
 _ROOT_LOCK_PATH = _REPO_ROOT / "uv.lock"
 _SETUP_SCRIPT_PATH = _REPO_ROOT / "scripts" / "setup.sh"
+_CANONICAL_SECURITY_POLICY_PATHS = (
+    _REPO_ROOT / "AGENTS.md",
+    _REPO_ROOT / "README.md",
+    _REPO_ROOT / "docs" / "source" / "deployment" / "docker-build.md",
+    _REPO_ROOT / "docs" / "source" / "integration" / "mcp-server.md",
+    _REPO_ROOT / "mcp" / "README.md",
+    _REPO_ROOT / "mcp" / "SECURITY.md",
+)
 
 
 def _iter_strings(value: Any) -> Iterator[str]:
@@ -72,13 +80,12 @@ def test_public_mcp_config_preserves_reference_orchestration_choices() -> None:
         "web_search_tool",
     }
     assert functions["intent_classifier"]["_type"] == "intent_classifier"
-    assert functions["clarifier_agent"] == {
-        "_type": "clarifier_agent",
-        "llm": "nemotron_super_llm",
-        "max_turns": 3,
-        "log_response_max_chars": 2000,
-        "verbose": True,
-    }
+    clarifier = functions["clarifier_agent"]
+    assert clarifier["_type"] == "clarifier_agent"
+    assert clarifier["llm"] == "nemotron_ultra_llm"
+    assert clarifier["max_turns"] == 3
+    assert clarifier["log_response_max_chars"] == 2000
+    assert "verbose" not in clarifier
     assert functions["shallow_research_agent"]["exclude_tools"] == ["advanced_web_search_tool"]
     assert functions["deep_research_agent"]["exclude_tools"] == ["web_search_tool"]
 
@@ -97,8 +104,8 @@ def test_public_mcp_config_uses_only_public_models_sources_and_environment_names
     config = yaml.safe_load(_CONFIG_PATH.read_text())
     text = _CONFIG_PATH.read_text().lower()
 
-    assert {entry["_type"] for entry in config["llms"].values()} == {"nim"}
     assert {entry["base_url"] for entry in config["llms"].values()} == {"https://integrate.api.nvidia.com/v1"}
+    assert all(entry["model_name"].startswith("nvidia/") for entry in config["llms"].values())
     assert config["functions"]["web_search_tool"]["_type"] == "tavily_web_search"
     assert config["functions"]["advanced_web_search_tool"]["_type"] == "tavily_web_search"
     assert "nvidia_api_key" in text
@@ -160,6 +167,9 @@ def test_root_workspace_excludes_the_independent_mcp_project() -> None:
                 )
             }
             continue
+        if "git" in source:
+            assert package["name"] == "nemo-relay"
+            continue
         editable = source.get("editable")
         assert isinstance(editable, str)
         assert not Path(editable).is_absolute()
@@ -178,7 +188,7 @@ def test_root_aiq_resolution_keeps_cryptography_in_the_nat_supported_range() -> 
     assert len(cryptography_policy) == 1
     assert Version("46.0.6") in cryptography_policy[0].specifier
     assert Version("47") not in cryptography_policy[0].specifier
-    assert Version("48.0.1") not in cryptography_policy[0].specifier
+    assert Version("50.0.0") not in cryptography_policy[0].specifier
 
     lock = tomllib.loads(_ROOT_LOCK_PATH.read_text())
     locked_versions = _locked_versions(lock, "cryptography")
@@ -211,17 +221,21 @@ def test_mcp_project_owns_its_sources_lock_and_scoped_cryptography_override() ->
 
     assert cryptography_overrides == [
         {
+            "package": {"name": "langchain-litellm", "version": "0.6.6"},
+            "dependencies": ["cryptography>=50.0.0,<51"],
+        },
+        {
             "package": {"name": "nvidia-nat-core", "version": "1.8.0"},
-            "dependencies": ["cryptography>=48.0.1,<49"],
+            "dependencies": ["cryptography>=50.0.0,<51"],
         },
         {
             "package": {"name": "oci", "version": "2.178.0"},
-            "dependencies": ["cryptography>=48.0.1,<49"],
+            "dependencies": ["cryptography>=50.0.0,<51"],
         },
     ]
 
     lock = tomllib.loads(_MCP_LOCK_PATH.read_text())
-    assert _locked_versions(lock, "cryptography") == {Version("48.0.1")}
+    assert _locked_versions(lock, "cryptography") == {Version("50.0.0")}
     assert any(package["name"] == "aiq-mcp-server" for package in lock["package"])
 
     local_sources = {
@@ -233,3 +247,18 @@ def test_mcp_project_owns_its_sources_lock_and_scoped_cryptography_override() ->
         "knowledge-layer": "../sources/knowledge_layer",
         "tavily-web-search": "../sources/tavily_web_search",
     }
+
+
+def test_mcp_cryptography_policy_is_consistent_across_canonical_docs() -> None:
+    for path in _CANONICAL_SECURITY_POLICY_PATHS:
+        text = path.read_text()
+        assert "cryptography==50.0.0" in text, path
+        assert "cryptography==48.0.1" not in text, path
+
+    security_policy = (_REPO_ROOT / "mcp" / "SECURITY.md").read_text()
+    for platform_contract in (
+        "Linux x86_64 with CPython 3.13",
+        "x86_64 macOS",
+        "32-bit Windows",
+    ):
+        assert platform_contract in security_policy

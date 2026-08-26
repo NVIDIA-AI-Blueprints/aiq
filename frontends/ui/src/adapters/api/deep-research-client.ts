@@ -222,12 +222,14 @@ export interface DeepResearchCallbacks {
   onWorkflowStart?: (name: string, input?: string, eventId?: string, agentId?: string) => void
   onWorkflowEnd?: (name: string, output?: string, eventId?: string, agentId?: string) => void
   /** Called on LLM events */
-  onLLMStart?: (name: string, workflow?: string) => void
+  onLLMStart?: (name: string, workflow?: string, agentId?: string) => void
   onLLMChunk?: (chunk: string) => void
   onLLMEnd?: (
     output: string,
     thinking?: string,
-    usage?: { input_tokens: number; output_tokens: number }
+    usage?: { input_tokens: number; output_tokens: number },
+    name?: string,
+    agentId?: string
   ) => void
   /** Called on tool events */
   onToolStart?: (name: string, input?: Record<string, unknown>, workflow?: string, eventId?: string, agentId?: string, isSandbox?: boolean) => void
@@ -454,8 +456,8 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
       }
 
       case 'llm.start': {
-        const llmData = rawData as { name: string; metadata?: { workflow?: string } }
-        callbacks.onLLMStart?.(llmData.name, llmData.metadata?.workflow)
+        const llmData = rawData as { name: string; metadata?: { workflow?: string; agent_id?: string } }
+        callbacks.onLLMStart?.(llmData.name, llmData.metadata?.workflow, llmData.metadata?.agent_id)
         break
       }
 
@@ -467,11 +469,13 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
       }
 
       case 'llm.end': {
-        // llm.end has nested structure: { id, name, timestamp, metadata: { thinking, usage }, data: { output } }
+        // llm.end has nested structure: { id, name, timestamp, metadata: { thinking, usage, agent_id }, data: { output } }
         const endData = rawData as {
+          name?: string
           data?: { output?: string }
           metadata?: {
             thinking?: string
+            agent_id?: string
             usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number }
           }
         }
@@ -485,7 +489,7 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
               output_tokens: rawUsage.output_tokens ?? rawUsage.completion_tokens ?? 0,
             }
           : undefined
-        callbacks.onLLMEnd?.(output, thinking, usage)
+        callbacks.onLLMEnd?.(output, thinking, usage, endData.name, endData.metadata?.agent_id)
         break
       }
 

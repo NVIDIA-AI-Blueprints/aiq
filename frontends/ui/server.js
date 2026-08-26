@@ -24,6 +24,7 @@
 const http = require('http')
 const httpProxy = require('http-proxy')
 const { parse } = require('url')
+const { forwardWebSocketAuthCookie } = require('./websocket-cookie')
 
 const dev = process.env.NODE_ENV !== 'production'
 const hostname = process.env.HOSTNAME || '0.0.0.0'
@@ -102,12 +103,9 @@ backendProxy.on('open', (proxySocket) => {
   } catch {}
 })
 
-// Forward cookies for backend WebSocket
-backendProxy.on('proxyReqWs', (proxyReq, req) => {
-  if (req.headers.cookie) {
-    proxyReq.setHeader('Cookie', req.headers.cookie)
-  }
-})
+// Forward only the cookie used to authenticate the backend WebSocket. Sending
+// the complete browser cookie jar can exceed the upstream HTTP header limit.
+backendProxy.on('proxyReqWs', forwardWebSocketAuthCookie)
 
 const startServer = async () => {
   // In production, prepare Next.js

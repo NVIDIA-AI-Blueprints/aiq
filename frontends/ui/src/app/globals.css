@@ -75,6 +75,21 @@
   --border-color-interaction-primary-base: var(--color-green-300);
   --text-color-brand: var(--color-brand);
   --border-color-brand: var(--color-brand);
+  --color-accent-line: #4e8500;
+  --background-color-surface-base: #f7f7f8;
+  --background-color-surface-navigation: #f7f7f8;
+  --background-color-surface-overlay: #efeff1;
+  --background-color-surface-raised: #ffffff;
+  --background-color-surface-sunken: #ededf0;
+  --background-color-surface-glass: color-mix(in srgb, #ffffff 88%, transparent);
+  --border-color-base: #dcdce1;
+  --text-color-primary: #16161a;
+  --text-color-secondary: #62626a;
+  --text-color-subtle: #9a9aa2;
+  --text-color-base: #3a3a42;
+  --text-color-feedback-danger: #d23a3f;
+  --text-color-feedback-warning: #a87b00;
+  --border-color-feedback-danger: #d23a3f;
 }
 
 /* Dark theme brand tokens — per KUI spec (same primary stops as light) */
@@ -85,6 +100,21 @@
   --border-color-interaction-primary-base: var(--color-green-300);
   --text-color-brand: var(--color-brand);
   --border-color-brand: var(--color-brand);
+  --color-accent-line: #8fd400;
+  --background-color-surface-base: #0a0a0b;
+  --background-color-surface-navigation: #0a0a0b;
+  --background-color-surface-overlay: #1b1b1f;
+  --background-color-surface-raised: #141417;
+  --background-color-surface-sunken: #08080a;
+  --background-color-surface-glass: color-mix(in srgb, #141417 90%, transparent);
+  --border-color-base: #2a2a31;
+  --text-color-primary: #ececee;
+  --text-color-secondary: #8c8c95;
+  --text-color-subtle: #5e5e66;
+  --text-color-base: #c4c4ca;
+  --text-color-feedback-danger: #e5484d;
+  --text-color-feedback-warning: #e8b500;
+  --border-color-feedback-danger: #e5484d;
 }
 
 /* Custom global styles */
@@ -94,6 +124,10 @@ body {
   min-width: 768px;
   margin: 0;
   padding: 0;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
 #__next {
@@ -555,4 +589,844 @@ body {
 }
 .result-chart-carousel > .result-chart {
   margin-top: 0;
+}
+
+/* =============================================================================
+   Shared chat-UI primitives (agent trace, answer prose, source cards).
+   Additive tokens + component classes referenced by shared/components.
+   ============================================================================= */
+:root {
+  --radius-card: 0.8rem;
+  --ease-premium: cubic-bezier(0.22, 1, 0.36, 1);
+  --color-agent-danger: #e5484d;
+  --text-answer: 0.975rem;
+  --text-answer-line-height: 1.65;
+  --spacing-section: 1.75rem;
+}
+
+/* ---- Answer prose: generous reading scale for the final answer -------------- */
+.answer-prose {
+  font-size: var(--text-answer);
+  line-height: var(--text-answer-line-height);
+  color: var(--text-color-primary);
+}
+.answer-prose h2 {
+  font-size: 1.375rem;
+  font-weight: 600;
+  margin-top: var(--spacing-section);
+  margin-bottom: 0.5rem;
+}
+.answer-prose h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  margin-top: 1.25rem;
+  margin-bottom: 0.4rem;
+}
+.answer-prose p {
+  margin: 0.75rem 0;
+}
+.answer-prose ul,
+.answer-prose ol {
+  margin: 0.5rem 0 0.85rem;
+  padding-left: 1.25rem;
+}
+.answer-prose li {
+  margin: 0.2rem 0;
+}
+
+/* ---- Status atom: one visual language for every agent-trace node ------------ */
+@keyframes dot-breathe {
+  0%,
+  100% {
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-brand) 32%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-brand) 6%, transparent);
+  }
+}
+.status-dot {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 0.625rem;
+  width: 0.625rem;
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+.status-dot-xs {
+  height: 0.5rem;
+  width: 0.5rem;
+}
+.status-dot-running {
+  background-color: var(--color-brand);
+  animation: dot-breathe 1.9s var(--ease-premium) infinite;
+}
+.status-dot-done {
+  background-color: var(--color-green-500);
+}
+.status-dot-pending {
+  background-color: transparent;
+  border: 1px solid color-mix(in srgb, var(--border-color-base) 72%, transparent);
+}
+.status-dot-waiting {
+  background-color: var(--color-brand);
+  animation: dot-breathe 2.4s ease-in-out infinite;
+}
+.status-dot-interrupted {
+  background-color: var(--color-agent-danger);
+}
+.status-dot-error {
+  background-color: var(--color-agent-danger);
+}
+
+/* ---- Shared tool-call row (inline trace + research panel) -------------------- */
+/* Fixed-width dot column so the status dot centers on the trace rail. The height
+   matches the label's first line box (font-size x line-height) so the dot
+   centers on the first line of every row regardless of run-state or size. */
+.tool-call-row-dot {
+  width: 1.25rem;
+  height: calc(0.875rem * 1.3);
+}
+.tool-call-row-label {
+  letter-spacing: -0.005em;
+  line-height: 1.3;
+}
+.tool-call-row-args {
+  color: var(--text-color-secondary);
+  font-size: 0.8125rem;
+  line-height: 1.35;
+}
+
+/* ---- KaTeX display math inside rendered markdown ---------------------------- */
+.markdown-content .katex-display {
+  margin: 0.35rem 0 0.6rem;
+  padding: 0.55rem 0.7rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--background-color-surface-raised);
+  border: 1px solid var(--border-color-base);
+  border-radius: var(--radius-card);
+}
+.markdown-content .katex {
+  font-size: 1.02em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-running,
+  .status-dot-waiting {
+    animation: none;
+  }
+}
+
+/* =============================================================================
+   Chat surfaces: live thinking trace, plan/approval block, answer + user bubble.
+   Tokens-only, additive; base status-dot / tool-call-row rules live above.
+   ============================================================================= */
+:root {
+  --dur-fast: 150ms;
+  --dur-mid: 240ms;
+  --color-agent-danger-deep: #c2363b;
+}
+
+@keyframes assistant-turn-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.mono-label {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-color-subtle);
+}
+.mono-meta {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.brand-focus-glow:focus-within {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 1px var(--color-brand);
+}
+.ai-soft-panel {
+  background-color: transparent;
+  border-color: color-mix(in srgb, var(--border-color-base) 64%, transparent);
+  box-shadow: none;
+}
+
+/* ---- Live trace: rail, working word, source pills --------------------------- */
+.thinking-trace-rail {
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--border-color-base) 90%, transparent) 12%,
+    color-mix(in srgb, var(--border-color-base) 60%, transparent) 62%,
+    transparent
+  );
+  box-shadow: none;
+}
+.thinking-source-pill {
+  background-color: color-mix(in srgb, var(--text-color-feedback-success) 8%, transparent);
+  border-color: color-mix(in srgb, var(--text-color-feedback-success) 38%, transparent);
+}
+
+.thinking-word {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  color: var(--text-color-secondary);
+}
+.thinking-dots {
+  display: inline-flex;
+}
+.thinking-dots > span {
+  animation: thinking-dot 1.4s var(--ease-premium) infinite;
+}
+.thinking-dots > span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+.thinking-dots > span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+@keyframes thinking-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.18;
+  }
+  40% {
+    opacity: 0.7;
+  }
+}
+
+/* ---- Phase rows ------------------------------------------------------------- */
+.thinking-phase-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.4rem 0.4rem 0.4rem 0;
+  text-align: left;
+  border-radius: var(--radius-card);
+  transition: background-color var(--dur-fast) var(--ease-premium);
+}
+button.thinking-phase-head:hover {
+  background-color: color-mix(in srgb, var(--text-color-primary) 6%, transparent);
+}
+.thinking-phase.is-pending .tool-call-row-label {
+  color: var(--text-color-subtle);
+}
+.thinking-phase.is-error .tool-call-row-label {
+  color: var(--color-agent-danger);
+}
+.thinking-phase-meta {
+  color: var(--text-color-subtle);
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- Sub-steps: demoted, indented, collapsible ------------------------------ */
+.thinking-substep-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  letter-spacing: 0.02em;
+  color: var(--text-color-secondary);
+}
+.thinking-substeps {
+  list-style: none;
+  margin: 0.1rem 0 0.3rem 1.6rem;
+  padding: 0 0 0 0.8rem;
+  border-left: 1px solid color-mix(in srgb, var(--border-color-base) 40%, transparent);
+}
+.thinking-substep {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.22rem 0;
+}
+.thinking-substep .tool-call-row-dot {
+  height: calc(0.8125rem * 1.3);
+}
+.thinking-substep .tool-call-row-label {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-color-secondary);
+}
+.thinking-substep .tool-call-row-args {
+  font-size: 0.78rem;
+}
+
+/* ---- Active phase indeterminate progress ------------------------------------ */
+@keyframes think-sweep {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(360%);
+  }
+}
+.thinking-progress {
+  position: relative;
+  display: block;
+  height: 2px;
+  margin: 0.65rem 0.4rem 0.45rem 1.95rem;
+  border-radius: 999px;
+  overflow: hidden;
+  background-color: color-mix(in srgb, var(--text-color-primary) 10%, transparent);
+}
+.thinking-progress::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 32%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--text-color-secondary), transparent);
+  animation: think-sweep 1.6s var(--ease-premium) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .thinking-dots > span,
+  .thinking-progress::after {
+    animation: none;
+  }
+}
+
+/* ---- Model reasoning / reflection / explanation shown collapsibly ----------- */
+.thinking-reasoning {
+  margin: 0.3rem 0.4rem 0.25rem 1.95rem;
+}
+.thinking-reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0;
+  border: 0;
+  background: none;
+  color: var(--text-color-subtle);
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+.thinking-reasoning-toggle:hover {
+  color: var(--text-color-secondary);
+}
+.thinking-reasoning-label {
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.thinking-reasoning-scroll {
+  margin: 0.3rem 0 0;
+  max-height: 11rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 2px solid var(--border-color-base);
+}
+.thinking-reasoning-scroll-tall {
+  max-height: 26rem;
+}
+.thinking-reasoning-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+.thinking-reasoning-scroll::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--border-color-base);
+}
+.thinking-reasoning-text {
+  margin: 0;
+  padding: 0.45rem 0.7rem;
+  color: var(--text-color-subtle);
+  font-size: 0.74rem;
+  font-style: italic;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.thinking-reflection-note {
+  margin: 0.25rem 0.4rem 0.35rem 1.95rem;
+}
+.thinking-reasoning-text.markdown-content {
+  font-style: normal;
+  line-height: 1.45;
+}
+.thinking-reasoning-text.markdown-content > :first-child {
+  margin-top: 0;
+}
+.thinking-reasoning-text.markdown-content p {
+  margin-bottom: 0.35rem;
+  line-height: 1.45;
+}
+.thinking-reasoning-text.markdown-content ul,
+.thinking-reasoning-text.markdown-content ol {
+  margin: 0.3rem 0;
+}
+.thinking-reasoning-text.markdown-content blockquote {
+  margin: 0.35rem 0;
+  padding-left: 0.6rem;
+}
+.thinking-reasoning-text.markdown-content .overflow-x-auto {
+  margin: 0.2rem 0 0.55rem;
+}
+.thinking-reasoning-text.markdown-content th,
+.thinking-reasoning-text.markdown-content td {
+  padding-top: 0.2rem;
+  padding-bottom: 0.2rem;
+}
+.thinking-reasoning-text.markdown-content :is(h1, h2, h3, h4) {
+  margin: 0.55rem 0 0.2rem;
+  line-height: 1.25;
+}
+.thinking-reasoning-text.markdown-content > :is(h1, h2, h3, h4):first-child {
+  margin-top: 0;
+}
+.thinking-reasoning-text.markdown-content :is(ul, ol) {
+  margin: 0.25rem 0;
+}
+.thinking-reasoning-text.markdown-content li {
+  margin: 0.12rem 0;
+  line-height: 1.4;
+}
+.thinking-reasoning-text.markdown-content li > p {
+  margin-bottom: 0.15rem;
+}
+.thinking-reasoning-text.markdown-content .katex-display {
+  margin: 0.15rem 0 0.5rem;
+  padding: 0.55rem 0.7rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: var(--background-color-surface-raised);
+  border: 1px solid var(--border-color-base);
+  border-radius: 8px;
+}
+.thinking-reasoning-text.markdown-content .katex {
+  font-size: 1.02em;
+}
+
+/* ---- Answer + agent response ------------------------------------------------- */
+.agent-final-response {
+  animation: assistant-turn-in var(--dur-mid) var(--ease-premium);
+}
+.agent-final-meta {
+  color: var(--text-color-subtle);
+  opacity: 0.86;
+  transition: opacity var(--dur-fast) var(--ease-premium);
+}
+.agent-final-response:hover .agent-final-meta {
+  opacity: 1;
+}
+
+@keyframes answer-block-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .markdown-content.answer-reveal > * {
+    animation: answer-block-reveal 0.45s var(--ease-premium, cubic-bezier(0.22, 1, 0.36, 1)) both;
+  }
+  .markdown-content.answer-reveal > *:nth-child(1) {
+    animation-delay: 0s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(2) {
+    animation-delay: 0.07s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(3) {
+    animation-delay: 0.14s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(4) {
+    animation-delay: 0.21s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(5) {
+    animation-delay: 0.28s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(6) {
+    animation-delay: 0.35s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(7) {
+    animation-delay: 0.42s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(8) {
+    animation-delay: 0.49s;
+  }
+  .markdown-content.answer-reveal > *:nth-child(n + 9) {
+    animation-delay: 0.56s;
+  }
+}
+
+/* ---- User message bubble ---------------------------------------------------- */
+.user-message-bubble {
+  background-color: color-mix(in srgb, var(--color-brand) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-brand) 42%, transparent);
+  box-shadow: none;
+  transition: border-color var(--dur-fast) var(--ease-premium);
+}
+.user-message-bubble:hover {
+  border-color: color-mix(in srgb, var(--color-brand) 58%, transparent);
+}
+
+/* ---- Interactive clarifier: options, plan preview, actions ------------------ */
+.agent-option-button {
+  background: transparent;
+  border-color: var(--border-color-base);
+  box-shadow: none;
+}
+.agent-option-button:hover {
+  border-color: var(--color-brand);
+  box-shadow: inset 2px 0 0 var(--color-brand);
+}
+.agent-option-index {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--color-brand) 88%, transparent);
+  border-radius: 0.375rem;
+  color: var(--color-brand);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.agent-plan-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.agent-plan-kicker {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background-color: var(--color-brand);
+  box-shadow: none;
+}
+.agent-plan-count {
+  margin-left: auto;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--color-brand);
+  background-color: color-mix(in srgb, var(--color-brand) 12%, transparent);
+}
+.agent-plan-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-block: 1px solid color-mix(in srgb, var(--border-color-base) 62%, transparent);
+}
+.agent-plan-title-text {
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-color-primary);
+}
+.agent-plan-sections {
+  position: relative;
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.agent-plan-sections::before {
+  content: '';
+  position: absolute;
+  left: 0.75rem;
+  top: 1.2rem;
+  bottom: 1.2rem;
+  width: 1px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    color-mix(in srgb, var(--color-brand) 36%, transparent) 12%,
+    color-mix(in srgb, var(--color-brand) 20%, transparent) 82%,
+    transparent
+  );
+}
+.agent-plan-section {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  min-height: 2rem;
+  padding: 0.35rem 0;
+  border-radius: 0.4rem;
+  padding-inline: 0.35rem;
+  margin-inline: -0.35rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color-base) 46%, transparent);
+  transition: background-color var(--dur-fast) var(--ease-premium);
+}
+.agent-plan-section:last-child {
+  border-bottom: 0;
+}
+.agent-plan-section:hover {
+  background-color: color-mix(in srgb, var(--color-brand) 5%, transparent);
+}
+.agent-plan-section-index {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+  border-radius: 0.4rem;
+  border: 1px solid color-mix(in srgb, var(--color-brand) 70%, transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--background-color-surface-raised) 82%,
+    var(--background-color-surface-base)
+  );
+  color: var(--color-brand);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  transition:
+    background-color var(--dur-fast) var(--ease-premium),
+    box-shadow var(--dur-fast) var(--ease-premium);
+}
+.agent-plan-section:hover .agent-plan-section-index {
+  background-color: color-mix(in srgb, var(--color-brand) 16%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-brand) 8%, transparent);
+}
+
+.agent-plan-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid color-mix(in srgb, var(--border-color-base) 56%, transparent);
+}
+.agent-key-hint {
+  font-family: var(--font-mono);
+  color: var(--text-color-subtle);
+  font-size: 0.7rem;
+  opacity: 0.85;
+}
+.agent-key-cap {
+  display: inline-grid;
+  place-items: center;
+  min-width: 1.05rem;
+  height: 1.05rem;
+  padding: 0 0.25rem;
+  border-radius: 0.25rem;
+  border: 1px solid color-mix(in srgb, var(--border-color-base) 70%, transparent);
+  background-color: color-mix(in srgb, var(--background-color-surface-raised) 50%, transparent);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-color-secondary);
+}
+
+.agent-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text-color-subtle);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.agent-divider::before,
+.agent-divider::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background-color: color-mix(in srgb, var(--border-color-base) 48%, transparent);
+}
+
+.agent-action-approve {
+  color: #0b0b0b !important;
+  background-color: var(--color-brand) !important;
+  border-color: var(--color-brand) !important;
+}
+.agent-action-approve:hover {
+  background-color: var(--color-green-200) !important;
+  border-color: var(--color-green-200) !important;
+}
+.agent-action-reject {
+  color: var(--color-agent-danger) !important;
+  background-color: transparent !important;
+  border-color: var(--color-agent-danger) !important;
+}
+.agent-action-reject:hover {
+  color: #ffffff !important;
+  background-color: var(--color-agent-danger-deep) !important;
+  border-color: var(--color-agent-danger) !important;
+}
+
+.agent-response-receipt {
+  width: fit-content;
+  max-width: 100%;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--border-color-base) 54%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--color-green-500) 65%, transparent);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--background-color-surface-raised) 18%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 3%, transparent);
+}
+.agent-response-icon {
+  display: grid;
+  width: 1.5rem;
+  height: 1.5rem;
+  flex-shrink: 0;
+  place-items: center;
+  color: var(--color-green-500);
+}
+.agent-response-receipt.is-reject {
+  border-left-color: color-mix(in srgb, var(--color-agent-danger) 60%, transparent);
+}
+.agent-response-receipt.is-reject .agent-response-icon {
+  color: var(--color-agent-danger);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-final-response {
+    animation: none;
+  }
+  .brand-focus-glow:focus-within {
+    box-shadow: 0 0 0 1px var(--color-brand);
+  }
+}
+
+/* =============================================================================
+   PR3b layout re-skin: composer, assistant run lane, and shared surface atoms.
+   Tokens-only (NVIDIA green + theme variables). Additive; no font or color
+   theme changes.
+   ============================================================================= */
+:root {
+  --radius-composer: 0.75rem;
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-accent-line, var(--color-brand));
+}
+
+.metric-value {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.surface-card {
+  border-radius: var(--radius-card);
+  transition:
+    background-color var(--dur-fast) var(--ease-premium),
+    border-color var(--dur-fast) var(--ease-premium),
+    box-shadow var(--dur-fast) var(--ease-premium),
+    transform var(--dur-fast) var(--ease-premium);
+}
+
+.brand-tint {
+  background-color: color-mix(in srgb, var(--color-brand) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-brand) 38%, transparent);
+}
+
+.brand-chip {
+  background-color: color-mix(in srgb, var(--color-brand) 12%, transparent);
+  color: var(--color-brand);
+}
+
+.assistant-rail {
+  background: transparent;
+  box-shadow: none;
+}
+
+.assistant-run-dot-active {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-brand) 18%, transparent);
+}
+
+.assistant-turn {
+  animation: assistant-turn-in var(--dur-mid) var(--ease-premium);
+}
+
+.assistant-turn-active .assistant-lane-glow,
+.assistant-turn-waiting .assistant-lane-glow {
+  border-left-color: color-mix(in srgb, var(--text-color-primary) 26%, transparent);
+  box-shadow: none;
+}
+
+.assistant-turn-interrupted .assistant-lane-glow {
+  border-left-color: color-mix(in srgb, var(--color-agent-danger) 60%, transparent);
+  box-shadow: none;
+}
+
+/* A quiet vertical spine on the left of each assistant turn, lit brand-green
+   while the turn is live (active / waiting) and danger when interrupted. */
+.assistant-lane-glow {
+  border-left: 2px solid transparent;
+  box-shadow: none;
+  transition:
+    border-color var(--dur-mid) var(--ease-premium),
+    box-shadow var(--dur-mid) var(--ease-premium);
+}
+
+.thinking-step-row {
+  transition:
+    color var(--dur-fast) var(--ease-premium),
+    transform var(--dur-fast) var(--ease-premium),
+    background-color var(--dur-fast) var(--ease-premium);
+}
+
+.thinking-step-row-active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.composer-surface {
+  background-color: var(--background-color-surface-raised);
+  border-color: var(--border-color-base);
+  box-shadow: none;
+}
+
+.composer-surface:focus-within {
+  border-color: var(--color-brand);
+  box-shadow: 0 0 0 1px var(--color-brand);
+}
+
+.composer-textarea textarea,
+.composer-textarea [contenteditable='true'] {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-turn {
+    animation: none;
+  }
 }

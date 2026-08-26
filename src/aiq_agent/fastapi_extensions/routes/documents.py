@@ -15,7 +15,9 @@
 
 """Document management endpoints."""
 
+import asyncio
 import logging
+from functools import partial
 
 from fastapi import APIRouter
 from fastapi import Depends
@@ -26,9 +28,12 @@ from fastapi import UploadFile
 from aiq_agent.fastapi_extensions.upload_security import UPLOAD_ENDPOINT_DESCRIPTION
 from aiq_agent.fastapi_extensions.upload_security import UploadValidationError
 from aiq_agent.fastapi_extensions.upload_security import get_upload_limits
+from aiq_agent.fastapi_extensions.upload_security import submit_validated_upload_batch
 from aiq_agent.fastapi_extensions.upload_security import validate_upload_count
 from aiq_agent.fastapi_extensions.upload_security import validated_upload_batch
 from aiq_agent.knowledge.base import BaseIngestor
+from aiq_agent.knowledge.base import IngestionBatchTooLargeError
+from aiq_agent.knowledge.base import IngestionCapacityError
 from aiq_agent.knowledge.schema import FileInfo
 from aiq_agent.knowledge.schema import IngestionJobStatus
 
@@ -52,8 +57,9 @@ def add_document_routes(router: APIRouter):
         responses={
             400: {"description": "No files provided"},
             404: {"description": "Collection not found"},
-            413: {"description": "Upload size or file-count limit exceeded"},
+            413: {"description": "Upload size, file-count, or ingestion-capacity limit exceeded"},
             415: {"description": "Unsupported, malformed, or mismatched file content"},
+            503: {"description": "Document ingestion is temporarily at capacity"},
             500: {"description": "Ingestion failed"},
         },
     )
@@ -76,23 +82,26 @@ def add_document_routes(router: APIRouter):
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
         # Verify collection exists
-        collection = ingestor.get_collection(collection_name)
+        collection = await asyncio.to_thread(ingestor.get_collection, collection_name)
         if collection is None:
             raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
 
         try:
             async with validated_upload_batch(files, limits=limits) as batch:
-                job_id = ingestor.submit_job(
-                    batch.temp_paths,
-                    collection_name,
-                    config={
-                        "cleanup_files": True,
-                        "original_filenames": batch.original_filenames,
-                    },
+                job_id = await submit_validated_upload_batch(
+                    partial(
+                        ingestor.submit_job,
+                        batch.temp_paths,
+                        collection_name,
+                        config={
+                            "cleanup_files": True,
+                            "original_filenames": batch.original_filenames,
+                        },
+                    ),
+                    batch,
                 )
-                batch.transfer_ownership()
 
-                job_status = ingestor.get_job_status(job_id)
+                job_status = await asyncio.to_thread(ingestor.get_job_status, job_id)
                 file_ids = [fd.file_id for fd in job_status.file_details]
                 logger.info("Submitted ingestion job %s for %d file(s)", job_id, len(files))
                 return UploadResponse(
@@ -103,6 +112,10 @@ def add_document_routes(router: APIRouter):
 
         except UploadValidationError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        except IngestionBatchTooLargeError as exc:
+            raise HTTPException(status_code=413, detail=str(exc)) from exc
+        except IngestionCapacityError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except HTTPException:
             raise
         except Exception as exc:
@@ -126,12 +139,12 @@ def add_document_routes(router: APIRouter):
     ) -> list[FileInfo]:
         """List all documents in a collection."""
         # Verify collection exists
-        collection = ingestor.get_collection(collection_name)
+        collection = await asyncio.to_thread(ingestor.get_collection, collection_name)
         if collection is None:
             raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
 
         try:
-            return ingestor.list_files(collection_name)
+            return await asyncio.to_thread(ingestor.list_files, collection_name)
         except Exception as e:
             logger.error(f"Failed to list documents: {e}")
             raise HTTPException(status_code=500, detail=str(e))
@@ -153,12 +166,12 @@ def add_document_routes(router: APIRouter):
     ) -> dict:
         """Delete files from a collection by ID."""
         # Verify collection exists
-        collection = ingestor.get_collection(collection_name)
+        collection = await asyncio.to_thread(ingestor.get_collection, collection_name)
         if collection is None:
             raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
 
         try:
-            result = ingestor.delete_files(request.file_ids, collection_name)
+            result = await asyncio.to_thread(ingestor.delete_files, request.file_ids, collection_name)
             logger.info(f"Deleted {result.get('total_deleted', 0)} files from {collection_name}")
             return result
         except Exception as e:
@@ -179,7 +192,7 @@ def add_document_routes(router: APIRouter):
     ) -> IngestionJobStatus:
         """Get the status of an ingestion job."""
         try:
-            status = ingestor.get_job_status(job_id)
+            status = await asyncio.to_thread(ingestor.get_job_status, job_id)
             if status is None:
                 raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
 

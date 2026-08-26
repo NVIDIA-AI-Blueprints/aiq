@@ -18,6 +18,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
@@ -65,13 +66,14 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 aiq \
-    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/aiq --shell /usr/sbin/nologin aiq
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/aiq --shell /usr/sbin/nologin aiq \
+    && install -d --owner=10001 --group=10001 /app/relay
 
 WORKDIR /app
 
 COPY --from=builder --chown=10001:10001 /opt/venv /opt/venv
 COPY --chown=10001:10001 configs/config_mcp.yml /app/configs/config_mcp.yml
-COPY --chown=10001:10001 LICENSE /licenses/LICENSE
+COPY --chown=10001:10001 LICENSE LICENSE-THIRD-PARTY /licenses/
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1

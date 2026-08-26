@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import datetime
 import logging
-import os
 
 import aiosqlite
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -99,22 +98,6 @@ __all__ = [
     "validate_tool_availability",
     "verify_citations",
 ]
-
-
-# @environment_variable AIQ_VERBOSE
-# @category Debug
-# @type bool
-# @default false
-# @required false
-# Enable verbose logging output. Accepts true/1/yes or false/0/no.
-def is_verbose(config_verbose: bool) -> bool:
-    """Check if verbose mode is enabled via env var or config."""
-    env_verbose = os.getenv("AIQ_VERBOSE", "").lower()
-    if env_verbose in ("true", "1", "yes"):
-        return True
-    if env_verbose in ("false", "0", "no"):
-        return False
-    return config_verbose
 
 
 def _create_chat_response(

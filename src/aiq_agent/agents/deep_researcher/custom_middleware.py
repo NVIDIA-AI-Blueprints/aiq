@@ -28,10 +28,13 @@ from pathlib import PurePosixPath
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware import hook_config
 from langchain.agents.middleware.types import ModelResponse
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
+from pydantic import BaseModel
+from pydantic import ValidationError
 
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
@@ -39,7 +42,10 @@ from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
+from aiq_agent.common.citation_verification import is_non_citable_status_output
+from aiq_agent.common.logging_utils import log_content_metadata
 
+from .models import ResearchNotes
 from .resource_limits import DeepResearchResourceLimits
 from .resource_limits import StateBudgetLedger
 
@@ -55,6 +61,15 @@ _SOURCE_ROUTING_PATH = "/shared/source_routing.json"
 _SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
 FINAL_REPORT_PATH = "/shared/output.md"
 FINAL_REPORT_STATE_PATHS = (FINAL_REPORT_PATH, "/output.md")
+_GENERATED_RETRY_MARKER = "aiq_generated_retry"
+_RESEARCHER_FINALIZATION_MARKER = "aiq_researcher_finalization"
+RESEARCHER_FINALIZATION_MODEL_CALLS = 1
+_RESEARCHER_FINALIZATION_PROMPT = (
+    "Your research model-call budget is exhausted. Do not call tools or continue researching. "
+    "Return your ResearchNotes now using only the existing conversation and tool-result history. "
+    "Preserve useful findings and sources gathered so far, identify unresolved gaps, and lower the "
+    "evidence confidence when support is incomplete."
+)
 _UNRESOLVED_SANDBOX_PATH_PATTERN = re.compile(
     r"<\s*sandbox_(?:artifact_dir|workdir)\s*>|\{\{\s*sandbox_(?:artifact_dir|workdir)\s*\}\}"
 )
@@ -96,6 +111,164 @@ def _tool_result_failed(result: object) -> bool:
     """Return whether a filesystem tool result reports an error."""
     status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
     return status == "error"
+
+
+class StructuredResponseTextFallbackMiddleware(AgentMiddleware):
+    """Recover one exact JSON response when a provider skips the output tool."""
+
+    def __init__(self, schema: type[BaseModel]) -> None:
+        self.schema = schema
+        schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"), ensure_ascii=False)
+        self._correction = (
+            "The previous response did not produce the required structured result. Do not call tools. "
+            "Return exactly one JSON object matching this JSON Schema, with no Markdown fences or prose:\n"
+            f"{schema_json}"
+        )
+
+    def _promote(self, response: ModelResponse) -> ModelResponse:
+        if response.structured_response is not None or len(response.result) != 1:
+            return response
+        message = response.result[0]
+        if not isinstance(message, AIMessage) or message.tool_calls or not isinstance(message.content, str):
+            return response
+        try:
+            structured = self.schema.model_validate_json(message.content)
+        except ValidationError:
+            return response
+        logger.info("Recovered %s from schema-valid JSON message content", self.schema.__name__)
+        return ModelResponse(result=response.result, structured_response=structured)
+
+    @staticmethod
+    def _needs_correction(response: ModelResponse) -> bool:
+        if response.structured_response is not None or len(response.result) != 1:
+            return False
+        message = response.result[0]
+        return isinstance(message, AIMessage) and not message.tool_calls and isinstance(message.content, str)
+
+    def _correction_request(self, request):
+        return request.override(
+            messages=[*request.messages, HumanMessage(content=self._correction)],
+            tools=[],
+            tool_choice=None,
+            response_format=None,
+        )
+
+    def wrap_model_call(self, request, handler):
+        """Promote JSON text, with one tools-disabled corrective call when needed."""
+        response = self._promote(handler(request))
+        if not self._needs_correction(response) or _is_researcher_finalization_request(request):
+            return response
+        logger.warning("Retrying %s as a tools-disabled JSON response", self.schema.__name__)
+        return self._promote(handler(self._correction_request(request)))
+
+    async def awrap_model_call(self, request, handler):
+        """Promote JSON text, with one tools-disabled corrective call when needed."""
+        response = self._promote(await handler(request))
+        if not self._needs_correction(response) or _is_researcher_finalization_request(request):
+            return response
+        logger.warning("Retrying %s as a tools-disabled JSON response", self.schema.__name__)
+        return self._promote(await handler(self._correction_request(request)))
+
+
+def _is_researcher_finalization_request(request) -> bool:
+    """Return whether this request is the researcher's single reserved finalization turn."""
+    return bool(
+        request.messages
+        and isinstance(request.messages[-1], HumanMessage)
+        and request.messages[-1].additional_kwargs.get(_RESEARCHER_FINALIZATION_MARKER)
+    )
+
+
+class ResearcherBudgetExhaustedError(Exception):
+    """Raised when the reserved researcher finalization turn does not produce notes."""
+
+    def __init__(self, model_calls: int, max_model_calls: int) -> None:
+        self.model_calls = model_calls
+        self.max_model_calls = max_model_calls
+        super().__init__(f"Researcher exhausted its {max_model_calls}-model-call budget after {model_calls} calls")
+
+
+class ResearcherFinalizationMiddleware(AgentMiddleware):
+    """Reserve one tools-disabled model turn for finalizing partial research.
+
+    ``ModelCallLimitMiddleware`` owns ``run_model_call_count``; the two middleware
+    must be installed as a pair.
+    """
+
+    def __init__(self, *, max_model_calls: int) -> None:
+        self.max_model_calls = max_model_calls
+
+    def _request(self, request):
+        """Return the original request until the budget binds, then force finalization."""
+        calls_made = request.state.get("run_model_call_count", 0)
+        if calls_made < self.max_model_calls:
+            return request
+        logger.warning(
+            "Researcher exhausted its %d-model-call budget after %d calls; entering finalization",
+            self.max_model_calls,
+            calls_made,
+        )
+        finalization_message = HumanMessage(
+            content=_RESEARCHER_FINALIZATION_PROMPT,
+            additional_kwargs={_RESEARCHER_FINALIZATION_MARKER: True},
+        )
+        return request.override(
+            messages=[*request.messages, finalization_message],
+            tools=[],
+            tool_choice=None,
+            response_format=ToolStrategy(ResearchNotes),
+        )
+
+    @staticmethod
+    def _finalized(response: ModelResponse) -> bool:
+        """Return whether the model produced schema-valid research notes."""
+        return response.structured_response is not None
+
+    @staticmethod
+    def _has_tool_calls(response: ModelResponse) -> bool:
+        """Return whether finalization attempted a tool call instead of returning notes."""
+        return any(isinstance(message, AIMessage) and message.tool_calls for message in response.result)
+
+    def _result(self, request, response: ModelResponse) -> ModelResponse:
+        """Accept notes or tool calls, and type prose-only exhaustion for fallback handling."""
+        if not _is_researcher_finalization_request(request) or self._finalized(response):
+            return response
+        if self._has_tool_calls(response):
+            return response
+        calls_made = request.state.get("run_model_call_count", 0)
+        raise ResearcherBudgetExhaustedError(calls_made + RESEARCHER_FINALIZATION_MODEL_CALLS, self.max_model_calls)
+
+    @staticmethod
+    def _refused(request) -> ToolMessage:
+        """Build the shared result for a tool call refused after finalization."""
+        return ToolMessage(
+            content="Researcher model-call budget exhausted; this tool was not executed.",
+            tool_call_id=request.tool_call["id"],
+            name=request.tool_call.get("name"),
+            status="error",
+        )
+
+    def wrap_model_call(self, request, handler):
+        """Force one synchronous finalization call after the normal-turn budget."""
+        finalization_request = self._request(request)
+        return self._result(finalization_request, handler(finalization_request))
+
+    async def awrap_model_call(self, request, handler):
+        """Force one asynchronous finalization call after the normal-turn budget."""
+        finalization_request = self._request(request)
+        return self._result(finalization_request, await handler(finalization_request))
+
+    def wrap_tool_call(self, request, handler):
+        """Prevent a hallucinated tool call from executing after finalization."""
+        if request.state.get("run_model_call_count", 0) <= self.max_model_calls:
+            return handler(request)
+        return self._refused(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Prevent a hallucinated tool call from executing after async finalization."""
+        if request.state.get("run_model_call_count", 0) <= self.max_model_calls:
+            return await handler(request)
+        return self._refused(request)
 
 
 class FinalReportCommitTracker:
@@ -514,7 +687,11 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
         return self.tracker.committed_text(files, paths=self.paths) is not None
 
     def _retry_count(self, messages: list[object]) -> int:
-        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+        return sum(
+            isinstance(message, HumanMessage)
+            and message.additional_kwargs.get(_GENERATED_RETRY_MARKER) == "required_output_file"
+            for message in messages
+        )
 
     def _check_after_model(self, state: object) -> dict[str, object] | None:
         messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
@@ -534,7 +711,12 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
 
         logger.warning("Agent reported completion before committing the required output; requesting corrective turn")
         return {
-            "messages": [HumanMessage(content=self._retry_message)],
+            "messages": [
+                HumanMessage(
+                    content=self._retry_message,
+                    additional_kwargs={_GENERATED_RETRY_MARKER: "required_output_file"},
+                )
+            ],
             "jump_to": "model",
         }
 
@@ -546,6 +728,77 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
     @hook_config(can_jump_to=["model"])
     async def aafter_model(self, state, runtime):
         """Verify asynchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
+
+
+class RequiredWriterDelegationMiddleware(AgentMiddleware):
+    """Prevent the orchestrator from terminating before writer-owned publication.
+
+    Source failures can make an orchestrator conclude that no further research
+    is useful and return ordinary assistant text without ever delegating to the
+    writer. Give it one bounded corrective turn that forbids more research and
+    requires writer delegation. The writer's existing commit middleware remains
+    the only component allowed to publish the final report.
+    """
+
+    def __init__(
+        self,
+        *,
+        tracker: FinalReportCommitTracker,
+        max_retries: int = 1,
+        reason_code: str = "writer_output_not_committed",
+    ) -> None:
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        self.tracker = tracker
+        self.max_retries = max_retries
+        self.reason_code = reason_code
+        self._retry_message = (
+            "The run cannot finish because writer-agent has not committed /shared/output.md. "
+            "Do not perform or retry source research. Delegate to writer-agent now using the Writer Delegation "
+            "Template and the plan, research notes, verified sources, and explicit evidence gaps already available. "
+            "After writer-agent returns, return only its completion marker."
+        )
+
+    def _retry_count(self, messages: list[object]) -> int:
+        return sum(
+            isinstance(message, HumanMessage)
+            and message.additional_kwargs.get(_GENERATED_RETRY_MARKER) == "required_writer_delegation"
+            for message in messages
+        )
+
+    def _check_after_model(self, state: object) -> dict[str, object] | None:
+        messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+        files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+        if not isinstance(messages, list) or not messages:
+            return None
+        last_message = messages[-1]
+        if not isinstance(last_message, AIMessage) or last_message.tool_calls:
+            return None
+        if self.tracker.committed_text(files, paths=FINAL_REPORT_STATE_PATHS) is not None:
+            return None
+        if self._retry_count(messages) >= self.max_retries:
+            raise RuntimeError(self.reason_code)
+
+        logger.warning("Orchestrator ended before writer delegation; requesting one corrective turn")
+        return {
+            "messages": [
+                HumanMessage(
+                    content=self._retry_message,
+                    additional_kwargs={_GENERATED_RETRY_MARKER: "required_writer_delegation"},
+                )
+            ],
+            "jump_to": "model",
+        }
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """Require a synchronous orchestrator to delegate writer publication."""
+        return self._check_after_model(state)
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        """Require an asynchronous orchestrator to delegate writer publication."""
         return self._check_after_model(state)
 
 
@@ -581,21 +834,21 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
         if "<|channel|>" in name:
             candidate = name.split("<|channel|>", maxsplit=1)[0]
             if candidate in self.valid_tool_names:
-                logger.info("Sanitized tool name: '%s' -> '%s'", name, candidate)
+                logger.info("Sanitized tool name (original_%s) -> '%s'", log_content_metadata(name), candidate)
                 return candidate
 
         # 2. Strip dot suffix if base name is valid
         if "." in name:
             candidate = name.split(".", maxsplit=1)[0]
             if candidate in self.valid_tool_names:
-                logger.info("Sanitized tool name: '%s' -> '%s'", name, candidate)
+                logger.info("Sanitized tool name (original_%s) -> '%s'", log_content_metadata(name), candidate)
                 return candidate
 
         # 3. Map common hallucinated names
         if name in _TOOL_NAME_ALIASES:
             mapped = _TOOL_NAME_ALIASES[name]
             if mapped in self.valid_tool_names:
-                logger.info("Mapped tool name: '%s' -> '%s'", name, mapped)
+                logger.info("Mapped tool name (original_%s) -> '%s'", log_content_metadata(name), mapped)
                 return mapped
 
         return name
@@ -624,10 +877,23 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
                 new_tool_calls = []
                 for tc in msg.tool_calls:
                     new_tool_calls.append({**tc, "name": self._sanitize_tool_name(tc["name"])})
-                new_msg = AIMessage(
-                    content=msg.content,
-                    tool_calls=new_tool_calls,
-                    id=msg.id,
+                additional_kwargs = dict(msg.additional_kwargs)
+                raw_tool_calls = additional_kwargs.get("tool_calls")
+                if isinstance(raw_tool_calls, list):
+                    sanitized_raw_tool_calls = []
+                    for raw_tool_call in raw_tool_calls:
+                        if not isinstance(raw_tool_call, dict) or not isinstance(raw_tool_call.get("function"), dict):
+                            sanitized_raw_tool_calls.append(raw_tool_call)
+                            continue
+                        function = dict(raw_tool_call["function"])
+                        function["name"] = self._sanitize_tool_name(str(function.get("name") or ""))
+                        sanitized_raw_tool_calls.append({**raw_tool_call, "function": function})
+                    additional_kwargs["tool_calls"] = sanitized_raw_tool_calls
+                new_msg = msg.model_copy(
+                    update={
+                        "additional_kwargs": additional_kwargs,
+                        "tool_calls": new_tool_calls,
+                    }
                 )
                 new_result.append(new_msg)
             else:
@@ -813,11 +1079,12 @@ class ToolRetryMiddleware(AgentMiddleware):
                 if attempt < self.max_retries:
                     tool_name = request.tool_call.get("name", "?") if hasattr(request, "tool_call") else "?"
                     logger.warning(
-                        "Tool %s failed (attempt %d/%d): %s",
-                        tool_name,
+                        "Tool call failed (tool_%s, attempt %d/%d, error_type=%s, detail_%s)",
+                        log_content_metadata(tool_name),
                         attempt + 1,
                         self.max_retries + 1,
-                        e,
+                        type(e).__name__,
+                        log_content_metadata(e),
                     )
                     await asyncio.sleep(delay)
                     delay *= self.backoff_factor
@@ -925,18 +1192,25 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 tool_name = request.tool_call.get("name", "")
             if tool_name not in self._source_tool_names:
                 return result
+            content = str(result.content)
+            if is_non_citable_status_output(content):
+                return result
             source_id = get_source_id_for_tool(tool_name)
-            sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
+            sources = extract_sources_from_tool_result(
+                tool_name,
+                content,
+                source_id=source_id,
+                result_status=getattr(result, "status", None),
+            )
             async with self._lock:
                 active_registry = self.active_registry()
                 for source in sources:
                     active_registry.add(source)
             if sources:
                 logger.info(
-                    "[CitationRegistry] Captured %d source(s) from %s: %s",
+                    "[CitationRegistry] Captured %d source(s) from %s",
                     len(sources),
                     tool_name,
-                    [s.url or s.citation_key for s in sources],
                 )
         return result
 
@@ -1101,7 +1375,12 @@ class SourceRoutingPersistenceMiddleware(AgentMiddleware):
         errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
         if errors:
             self.state_budget.rollback(reservation)
-            logger.error("Failed to persist source routing to %s: %s", self.path, "; ".join(errors))
+            logger.error(
+                "Failed to persist source routing to %s (error_count=%d detail_%s)",
+                self.path,
+                len(errors),
+                log_content_metadata("; ".join(errors)),
+            )
             raise RuntimeError(f"Failed to persist source routing to {self.path}")
 
     def after_agent(self, state, runtime):
@@ -1210,9 +1489,12 @@ class PlanPersistenceMiddleware(AgentMiddleware):
         errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
         if errors:
             self.state_budget.rollback(reservation)
-            # Raw backend detail stays in logs; the raised error reaches the job status /
-            # caller, so it must not echo backend-internal strings (hostnames, paths, etc.).
-            logger.error("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
+            logger.error(
+                "Failed to persist plan to %s (error_count=%d detail_%s)",
+                self.path,
+                len(errors),
+                log_content_metadata("; ".join(errors)),
+            )
             raise RuntimeError(f"Failed to persist the research plan to {self.path}")
 
     def after_agent(self, state, runtime):

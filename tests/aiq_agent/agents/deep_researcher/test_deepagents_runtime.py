@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 from contextlib import nullcontext
-from pathlib import Path
 from threading import Event
 from threading import Thread
 from typing import Any
@@ -27,7 +26,6 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
-import yaml
 from deepagents.backends import CompositeBackend
 from deepagents.backends import FilesystemBackend
 from deepagents.backends import StateBackend
@@ -45,53 +43,6 @@ from aiq_agent.agents.deep_researcher.deepagents_runtime import resolve_skill_co
 SYNTHESIS_SKILL_SOURCE = f"{BUILTIN_SKILL_SOURCE}synthesis/"
 
 
-def test_openshell_workflow_only_diverges_for_sandbox_wiring() -> None:
-    """Keep the OpenShell workflow aligned with the standard web config."""
-
-    def load(path: str) -> dict[str, Any]:
-        text = Path(path).read_text(encoding="utf-8")
-        text = text.replace("${AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK:-true}", "true")
-        return yaml.safe_load(text)
-
-    standard = load("configs/config_web_default_llamaindex.yml")
-    openshell = load("configs/config_openshell.yml")
-    openshell_functions = openshell["functions"].copy()
-    openshell_functions.pop("deep_research_skills")
-    openshell_functions.pop("deep_research_sandbox")
-    openshell_functions["deep_research_agent"] = openshell_functions["deep_research_agent"].copy()
-    openshell_functions["deep_research_agent"].pop("skills")
-    openshell_functions["deep_research_agent"].pop("sandbox")
-
-    assert openshell["general"] == standard["general"]
-    assert openshell["llms"] == standard["llms"]
-    assert openshell_functions == standard["functions"]
-    assert openshell["workflow"] == standard["workflow"]
-
-
-def test_modal_reference_profile_enables_bounded_artifact_capture() -> None:
-    """Keep the shipped Modal profile's capture policy validated."""
-    config = yaml.safe_load(Path("configs/config_domain_routing_and_skills.yml").read_text(encoding="utf-8"))
-    sandbox_data = config["functions"]["deep_research_sandbox"].copy()
-
-    assert sandbox_data.pop("_type") == "deep_research_sandbox"
-    sandbox = DeepResearchSandboxConfig.model_validate(sandbox_data)
-
-    assert sandbox.provider == "modal"
-    assert sandbox.artifact_capture.enabled is True
-    assert sandbox.artifact_capture.max_file_bytes == 50_000_000
-    assert sandbox.artifact_capture.allow_extensions == (
-        ".png",
-        ".jpg",
-        ".jpeg",
-        ".webp",
-        ".csv",
-        ".json",
-        ".md",
-        ".ipynb",
-        ".pdf",
-    )
-
-
 class TestSkillCollections:
     """Public skill config uses collection names, not DeepAgents virtual paths."""
 
@@ -100,6 +51,7 @@ class TestSkillCollections:
 
         assert collections["research"] == "/skills/research/"
         assert collections["synthesis"] == "/skills/synthesis/"
+        assert collections["visualization"] == "/skills/visualization/"
 
     def test_nested_skill_collections_are_discovered(self, tmp_path) -> None:
         skill_dir = tmp_path / "finance" / "earnings" / "quarterly-summary"
@@ -141,6 +93,17 @@ class TestDeepAgentsRuntimeRouting:
         assert set(backend.routes) == {BUILTIN_SKILL_SOURCE}
         assert isinstance(backend.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
         assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
+
+    def test_agent_has_chart_skill_tracks_visualization_collection(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=DeepResearchSkillsConfig(
+                agents={"writer-agent": ("visualization",), "researcher-agent": ("synthesis",)},
+            ),
+        )
+
+        assert runtime.agent_has_chart_skill("writer-agent") is True
+        assert runtime.agent_has_chart_skill("researcher-agent") is False
+        assert runtime.agent_has_chart_skill("planner-agent") is False
 
     def test_sandbox_only_adds_shared_route(self) -> None:
         fake_sandbox = MagicMock()

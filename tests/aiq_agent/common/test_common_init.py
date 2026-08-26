@@ -30,75 +30,7 @@ from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_checkpointer
 from aiq_agent.common import is_postgres_dsn
-from aiq_agent.common import is_verbose
 from aiq_agent.common import parse_data_sources
-
-
-class TestIsVerbose:
-    """Tests for the is_verbose function."""
-
-    def test_verbose_env_true_overrides_config_false(self):
-        """Test that env var 'true' overrides config False."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "true"}):
-            assert is_verbose(config_verbose=False) is True
-
-    def test_verbose_env_1_overrides_config_false(self):
-        """Test that env var '1' overrides config False."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "1"}):
-            assert is_verbose(config_verbose=False) is True
-
-    def test_verbose_env_yes_overrides_config_false(self):
-        """Test that env var 'yes' overrides config False."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "yes"}):
-            assert is_verbose(config_verbose=False) is True
-
-    def test_verbose_env_false_overrides_config_true(self):
-        """Test that env var 'false' overrides config True."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "false"}):
-            assert is_verbose(config_verbose=True) is False
-
-    def test_verbose_env_0_overrides_config_true(self):
-        """Test that env var '0' overrides config True."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "0"}):
-            assert is_verbose(config_verbose=True) is False
-
-    def test_verbose_env_no_overrides_config_true(self):
-        """Test that env var 'no' overrides config True."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "no"}):
-            assert is_verbose(config_verbose=True) is False
-
-    def test_verbose_env_empty_uses_config_true(self):
-        """Test that empty env var falls back to config."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": ""}):
-            assert is_verbose(config_verbose=True) is True
-
-    def test_verbose_env_empty_uses_config_false(self):
-        """Test that empty env var falls back to config False."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": ""}):
-            assert is_verbose(config_verbose=False) is False
-
-    def test_verbose_env_unset_uses_config_true(self):
-        """Test that unset env var falls back to config True."""
-        with patch.dict(os.environ, clear=True):
-            os.environ.pop("AIQ_VERBOSE", None)
-            assert is_verbose(config_verbose=True) is True
-
-    def test_verbose_env_unset_uses_config_false(self):
-        """Test that unset env var falls back to config False."""
-        with patch.dict(os.environ, clear=True):
-            os.environ.pop("AIQ_VERBOSE", None)
-            assert is_verbose(config_verbose=False) is False
-
-    def test_verbose_env_uppercase_true(self):
-        """Test that uppercase 'TRUE' is recognized."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "TRUE"}):
-            assert is_verbose(config_verbose=False) is True
-
-    def test_verbose_env_random_value_uses_config(self):
-        """Test that random env value falls back to config."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "maybe"}):
-            assert is_verbose(config_verbose=True) is True
-            assert is_verbose(config_verbose=False) is False
 
 
 class TestCreateChatResponse:

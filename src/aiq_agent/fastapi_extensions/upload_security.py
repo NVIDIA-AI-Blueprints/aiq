@@ -113,6 +113,37 @@ class ValidatedUploadBatch:
         self._ownership_transferred = True
 
 
+async def submit_validated_upload_batch(
+    submit_job: Callable[[], str],
+    batch: ValidatedUploadBatch,
+) -> str:
+    """Run blocking ingestion submission without racing temporary-file cleanup.
+
+    ``asyncio.to_thread`` cannot stop its worker when the request is cancelled.
+    Wait for that worker to quiesce before the upload context can remove files;
+    if submission succeeded, transfer cleanup ownership even though the client
+    disconnected.
+    """
+    submit_task = asyncio.create_task(asyncio.to_thread(submit_job))
+    try:
+        job_id = await asyncio.shield(submit_task)
+    except asyncio.CancelledError:
+        while not submit_task.done():
+            try:
+                await asyncio.shield(submit_task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not submit_task.cancelled():
+            error = submit_task.exception()
+            if error is None:
+                batch.transfer_ownership()
+        raise
+    batch.transfer_ownership()
+    return job_id
+
+
 @dataclass(frozen=True)
 class _RawOfficeArchiveEntry:
     """ZIP entry facts measured from local headers and decompressed bytes."""

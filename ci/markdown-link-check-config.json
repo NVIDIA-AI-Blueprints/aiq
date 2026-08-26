@@ -7,6 +7,9 @@
             "pattern": "^https?://127\\.0\\.0\\.1"
         },
         {
+            "pattern": "^https://build\\.nvidia\\.com(?:/.*)?$"
+        },
+        {
             "pattern": "^https?://www\\.npmjs\\.com/package/@nvidia/foundations-react-core$"
         },
         {

@@ -22,7 +22,7 @@ import { useWebSocketChat, useChatStore, useIsCurrentSessionBusy } from '@/featu
 import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
 import { useFileUpload, useFileDragDrop, useFileUploadBanners } from '@/features/documents'
-import { Globe, Document, Paperclip, Paperplane, Cancel } from '@/adapters/ui/icons'
+import { Globe, Document, Paperclip, Paperplane, Cancel, StopCircle } from '@/adapters/ui/icons'
 
 /** Connection mode for the chat */
 export type ConnectionMode = 'sse' | 'websocket'
@@ -149,7 +149,12 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
     prevPendingCountRef.current = pendingCount
   }, [pendingCount, pendingFilesWarningActive, removeFileUploadWarning])
 
-  const { sendMessage, isLoading, respondToInteraction, pendingInteraction } = wsChat
+  const { sendMessage, respondToInteraction, pendingInteraction, disconnect } = wsChat
+
+  // Stop an in-flight generation by dropping the WebSocket connection
+  const handleStop = useCallback(() => {
+    disconnect()
+  }, [disconnect])
 
   // Register respondToInteraction in the store so sibling components (e.g. AgentPrompt) can use it
   const setRespondToInteractionFn = useChatStore((state) => state.setRespondToInteractionFn)
@@ -165,6 +170,8 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
+  const promptDraft = useLayoutStore((s) => s.promptDraft)
+  const setPromptDraft = useLayoutStore((s) => s.setPromptDraft)
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
@@ -177,6 +184,18 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
 
   const isDisabledByAuth = !isAuthenticated
   const disabled = isDisabledByAuth || ((isBusy || isResearchSessionInProgress) && !isResponseMode)
+
+  // True while a generation is in flight (not a HITL response), used to swap send for Stop
+  const isProcessing = isBusy && !isResponseMode
+
+  // Prefill the composer from a staged prompt (e.g. a welcome-state example chip)
+  useEffect(() => {
+    if (promptDraft && !isDisabledByAuth) {
+      if (!currentConversation) ensureSession()
+      setMessage(promptDraft)
+      setPromptDraft(null)
+    }
+  }, [promptDraft, isDisabledByAuth, currentConversation, ensureSession, setPromptDraft])
 
   // Dynamic placeholder based on state
   // Note: isResponseMode is checked before isBusy because the user needs to
@@ -315,11 +334,11 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   const totalSourcesCount = availableDataSources?.length ?? 0
 
   return (
-    <Flex direction="col" className="mx-auto w-full max-w-3xl p-4">
+    <Flex direction="col" className="mx-auto w-full max-w-4xl px-6 py-4">
       <Flex
         direction="col"
         className={`
-          bg-surface-raised relative rounded-2xl border border-black p-4 transition-colors
+          composer-surface relative rounded-[var(--radius-composer)] border p-3.5 transition-colors
           ${isDisabledByAuth ? 'opacity-60' : ''}
           ${isDragging && isUnsupportedDrag ? 'border-error border-dashed' : isDragging ? 'border-brand border-dashed' : ''}
         `}
@@ -327,7 +346,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
       >
         {/* Drag overlay */}
         {isDragging && (
-          <div className="bg-surface-raised-90 absolute inset-0 z-10 flex items-center justify-center rounded-2xl">
+          <div className="bg-surface-raised-90 absolute inset-0 z-10 flex items-center justify-center rounded-[var(--radius-composer)]">
             <Flex direction="col" align="center" gap="2">
               {isUnsupportedDrag ? (
                 <Cancel className="text-error h-8 w-8" />
@@ -351,7 +370,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
         {/* Text Input */}
         <div onKeyDown={handleKeyDown}>
           <TextArea
-            className="bg-surface-raised border-0"
+            className="composer-textarea border-0 bg-transparent"
             value={message}
             onValueChange={handleValueChange}
             placeholder={getPlaceholder()}
@@ -370,9 +389,23 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
         )}
 
         {/* Bottom Actions Bar */}
-        <Flex align="center" justify="end" className="mt-3">
+        <Flex align="center" justify="between" gap="3" className="border-base mt-3 border-t pt-3">
+          {/* Left: status chips */}
+          <Flex align="center" gap="2" className="min-w-0">
+            {isResponseMode && (
+              <span className="brand-chip inline-flex h-7 items-center rounded-full px-2.5 text-xs font-medium">
+                Response required
+              </span>
+            )}
+            {pendingCount > 0 && !isResponseMode && (
+              <span className="text-warning bg-surface-raised-30 border-warning inline-flex h-7 items-center rounded-full border px-2.5 text-xs font-medium">
+                {pendingCount} pending
+              </span>
+            )}
+          </Flex>
+
           {/* Right Actions: Counters, Attach, Research, Submit */}
-          <Flex align="center" gap="2">
+          <Flex align="center" gap="1.5" className="shrink-0">
             {/* Sources indicator - clickable to toggle data connections tab */}
             <Button
               kind="tertiary"
@@ -474,6 +507,17 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                   <Paperplane className="h-4 w-4" />
                 </Button>
               </Popover>
+            ) : isProcessing ? (
+              <Button
+                kind="secondary"
+                size="small"
+                color="danger"
+                onClick={handleStop}
+                aria-label="Stop generating"
+                title="Stop generating"
+              >
+                <StopCircle className="h-4 w-4" />
+              </Button>
             ) : (
               <Button
                 kind="primary"
@@ -484,11 +528,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 aria-label={isResponseMode ? 'Send response' : 'Send message'}
                 title="Send query"
               >
-                {isLoading ? (
-                  <span className="animate-pulse">...</span>
-                ) : (
-                  <Paperplane className="h-4 w-4" />
-                )}
+                <Paperplane className="h-4 w-4" />
               </Button>
             )}
           </Flex>

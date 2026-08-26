@@ -1,10 +1,11 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the aiq-research helper's terminal-state and escalation contract (AIQ-018).
+"""Tests for the aiq-research helper's CLI, terminal-state, and escalation contracts.
 
-Covers two 26.07 backend contract fixes in ``skills/aiq-research/scripts/aiq.py``:
+Covers these contracts in ``skills/aiq-research/scripts/aiq.py``:
 
+- CLI: ``-h`` and ``--help`` print usage and exit successfully.
 - SK-1: the ``interrupted`` job state is terminal and reported as a failure, so
   polling stops immediately instead of running until the long-poll timeout.
 - SK-2: a JSON ``job_escalation`` deep-research response is recognized and surfaced
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -40,6 +42,23 @@ def _load() -> ModuleType:
 @pytest.fixture(scope="module")
 def aiq() -> ModuleType:
     return _load()
+
+
+# --- CLI help contract -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("help_flag", ["-h", "--help"])
+def test_help_prints_usage_and_exits_successfully(help_flag: str) -> None:
+    result = subprocess.run(
+        [sys.executable, str(_SCRIPT), help_flag],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout.startswith("Usage: aiq.py <command> [args]\n")
 
 
 # --- SK-1: interrupted is a terminal, failed state -------------------------------

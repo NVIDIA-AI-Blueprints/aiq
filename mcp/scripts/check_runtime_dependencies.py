@@ -16,8 +16,9 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 _ALLOWED_INCOMPATIBILITIES = {
-    ("nvidia-nat-core", "1.8.0", "cryptography", "48.0.1", "<47,>=46.0.6"),
-    ("oci", "2.178.0", "cryptography", "48.0.1", "<47.0.0,>=3.2.1"),
+    ("langchain-litellm", "0.6.6", "cryptography", "50.0.0", "<49.0.0,>=46.0.5"),
+    ("nvidia-nat-core", "1.8.0", "cryptography", "50.0.0", "<47,>=46.0.6"),
+    ("oci", "2.178.0", "cryptography", "50.0.0", "<47.0.0,>=3.2.1"),
 }
 
 # Release-image import canary: every module the server needs at runtime must be

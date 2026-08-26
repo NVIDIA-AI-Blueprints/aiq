@@ -39,6 +39,9 @@ async def report_edit_app(monkeypatch):
 
     monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
     monkeypatch.setattr(jobs_routes, "_reap_ghost_jobs", AsyncMock())
+    monkeypatch.setattr(jobs_routes, "_is_readable_regular_file", MagicMock(return_value=True))
+    monkeypatch.setattr(jobs_routes, "_bootstrap_async_job_storage", AsyncMock())
+    monkeypatch.setattr(jobs_routes, "_probe_async_job_readiness", AsyncMock(return_value=None))
     monkeypatch.setattr(jobs_routes, "require_verified_principal", lambda: principal)
     monkeypatch.setattr(access, "authorize_job_access", authorize_job_access)
     monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())

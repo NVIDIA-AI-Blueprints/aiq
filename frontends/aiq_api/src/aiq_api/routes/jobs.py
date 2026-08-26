@@ -40,6 +40,7 @@ from typing import Any
 
 from fastapi import Body
 from fastapi import FastAPI
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
@@ -63,6 +64,145 @@ if TYPE_CHECKING:
     from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 
 logger = logging.getLogger(__name__)
+
+_ASYNC_JOB_READINESS_TIMEOUT_SECONDS = 3.0
+_READINESS_JOB_ID = "__aiq_readiness_probe__"
+_REQUIRED_ASYNC_JOB_TABLES = frozenset({"job_info", "job_access", "job_events", "artifacts", "deep_research_admission"})
+
+
+def _is_readable_regular_file(path: str) -> bool:
+    """Return whether ``path`` names a readable regular file."""
+    if not path or not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "rb") as config_file:
+            config_file.read(1)
+    except OSError:
+        return False
+    return True
+
+
+def _scheduler_info(job_store: Any) -> Any:
+    """Perform one synchronous scheduler RPC (called from a worker thread)."""
+    client = job_store.dask_client
+    return client.sync(
+        client.scheduler.identity,
+        callback_timeout=_ASYNC_JOB_READINESS_TIMEOUT_SECONDS,
+    )
+
+
+async def _table_names(db_url: str) -> set[str]:
+    """Return database table names through AI-Q's shared async engine."""
+    from sqlalchemy import inspect
+
+    from ..jobs.event_store import EventStore
+
+    engine = EventStore._get_or_create_async_engine(db_url)
+    async with engine.connect() as conn:
+        return await conn.run_sync(lambda sync_conn: set(inspect(sync_conn).get_table_names()))
+
+
+async def _bootstrap_async_job_storage(db_url: str, job_store: Any) -> None:
+    """Initialize owned tables and verify NAT's mapped ``job_info`` contract."""
+    from nat.front_ends.fastapi.async_jobs.job_store import JobInfo
+
+    from ..jobs.access import ensure_job_access_table
+    from ..jobs.admission import ensure_deep_research_admission_table
+    from ..jobs.event_store import EventStore
+
+    engine = EventStore._get_or_create_async_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(JobInfo.metadata.create_all, checkfirst=True)
+
+    await asyncio.to_thread(ensure_job_access_table, db_url)
+    await asyncio.to_thread(ensure_deep_research_admission_table, db_url)
+    await asyncio.to_thread(_validate_artifact_store, db_url)
+    await asyncio.to_thread(EventStore._ensure_table_exists, db_url)
+
+    tables = await _table_names(db_url)
+    missing_tables = _REQUIRED_ASYNC_JOB_TABLES - tables
+    if missing_tables:
+        raise RuntimeError(f"Required async-job tables are unavailable: {sorted(missing_tables)}")
+
+    # A mapped read verifies every JobInfo column. ``create_all(checkfirst=True)``
+    # intentionally creates a missing table but never mutates an incomplete one.
+    await job_store.get_job(_READINESS_JOB_ID)
+
+
+async def _probe_async_job_readiness(
+    *,
+    dask_available: bool,
+    job_store: Any,
+    scheduler_address: str | None,
+    db_url: str,
+    config_path: str,
+    submit_route_registered: bool,
+) -> dict[str, str] | None:
+    """Run the uncached async-job readiness contract under one total budget."""
+    db_status = "unchecked"
+
+    async def _probe() -> dict[str, str] | None:
+        nonlocal db_status
+
+        if not dask_available or job_store is None or not scheduler_address:
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        if not await asyncio.to_thread(_is_readable_regular_file, config_path):
+            return {"reason": "configuration_missing", "db": db_status}
+
+        db_status = "unreachable"
+        try:
+            tables = await _table_names(db_url)
+        except Exception as exc:
+            logger.warning("Async-job readiness database connection failed error_type=%s", type(exc).__name__)
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        db_status = "schema_unavailable"
+        missing_tables = _REQUIRED_ASYNC_JOB_TABLES - tables
+        if missing_tables:
+            logger.warning("Async-job readiness is missing required database tables: %s", sorted(missing_tables))
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        try:
+            from ..jobs.access import validate_job_access_table
+
+            await asyncio.to_thread(validate_job_access_table, db_url)
+        except Exception as exc:
+            logger.warning("Async-job readiness access schema read failed error_type=%s", type(exc).__name__)
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        try:
+            from ..jobs.admission import validate_deep_research_admission_table
+
+            await asyncio.to_thread(validate_deep_research_admission_table, db_url)
+        except Exception as exc:
+            logger.warning("Async-job readiness admission schema read failed error_type=%s", type(exc).__name__)
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        try:
+            await job_store.get_job(_READINESS_JOB_ID)
+        except Exception as exc:
+            logger.warning("Async-job readiness JobStore mapped read failed error_type=%s", type(exc).__name__)
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        db_status = "ok"
+        try:
+            await asyncio.to_thread(_scheduler_info, job_store)
+        except Exception as exc:
+            logger.warning("Async-job readiness scheduler RPC failed error_type=%s", type(exc).__name__)
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        if not submit_route_registered:
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        return None
+
+    try:
+        async with asyncio.timeout(_ASYNC_JOB_READINESS_TIMEOUT_SECONDS):
+            return await _probe()
+    except TimeoutError:
+        logger.warning("Async-job readiness probe exceeded %.1fs", _ASYNC_JOB_READINESS_TIMEOUT_SECONDS)
+        return {"reason": "async_jobs_unavailable", "db": db_status}
 
 
 def _remove_existing_health_routes(app: FastAPI) -> int:
@@ -493,16 +633,13 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     Uses NAT's JobStore for job metadata and Dask for distributed execution.
     The /v1/data_sources endpoint is always registered regardless of Dask availability.
     """
-    import logging as std_logging
     import os
 
     from aiq_agent.common.data_source_registry import get_all_sources
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs.access import authorize_job_access
-    from ..jobs.access import ensure_job_access_table
     from ..jobs.admission import JobAdmissionError
-    from ..jobs.admission import ensure_deep_research_admission_table
     from ..jobs.crypto import ContentEncryptionConfigError
     from ..jobs.crypto import ContentEncryptionInvalidData
     from ..jobs.crypto import ContentEncryptionUnavailable
@@ -550,10 +687,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     scheduler_address = getattr(worker, "_scheduler_address", None) or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
     db_url = getattr(worker, "_db_url", None) or os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
     config_path = getattr(worker, "_config_file_path", None) or os.environ.get("NAT_CONFIG_FILE", "")
-    log_level = getattr(worker, "_log_level", std_logging.INFO)
-    use_threads = getattr(worker, "_use_dask_threads", False)
     front_end_config = getattr(worker, "_front_end_config", None)
     default_expiry_seconds = getattr(front_end_config, "expiry_seconds", 86400) if front_end_config else 86400
+    submit_route_registered = False
 
     # NAT registers its generic /health route first. Replace it before any
     # async-job prerequisite early return so /health always means readiness.
@@ -568,34 +704,19 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     async def health_check():
         """Readiness endpoint that validates async-job, DB, and encryption dependencies."""
         from fastapi.responses import JSONResponse
-        from sqlalchemy import text
-
-        from ..jobs.event_store import EventStore
 
         result = {"status": "healthy", "dask_available": bool(dask_available), "db": "ok"}
-        if not dask_available or not job_store:
+        readiness_failure = await _probe_async_job_readiness(
+            dask_available=dask_available,
+            job_store=job_store,
+            scheduler_address=scheduler_address,
+            db_url=db_url,
+            config_path=config_path,
+            submit_route_registered=submit_route_registered,
+        )
+        if readiness_failure is not None:
             result["status"] = "degraded"
-            result["db"] = "unchecked"
-            result["reason"] = "async_jobs_unavailable"
-            return JSONResponse(status_code=503, content=result)
-        if not config_path:
-            result["status"] = "degraded"
-            result["db"] = "unchecked"
-            result["reason"] = "configuration_missing"
-            return JSONResponse(status_code=503, content=result)
-
-        # Check DB connectivity by obtaining (or creating) the engine for the
-        # configured db_url and running a bounded ping. An empty async-engine
-        # cache is the normal fresh-process state and must never be treated as
-        # healthy: readiness must reflect the actual database.
-        try:
-            engine = EventStore._get_or_create_async_engine(db_url)
-            async with engine.connect() as conn:
-                await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
-        except Exception:
-            logger.warning("Health check DB ping failed", exc_info=True)
-            result["status"] = "degraded"
-            result["db"] = "unreachable"
+            result.update(readiness_failure)
             return JSONResponse(status_code=503, content=result)
 
         try:
@@ -668,15 +789,40 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")
 
-    if not dask_available or not job_store:
+    static_failure: str | None = None
+    if not dask_available or job_store is None or not scheduler_address:
         logger.warning(
             "Dask not available - async job submission routes require NAT_DASK_SCHEDULER_ADDRESS"
             " and NAT_JOB_STORE_DB_URL"
         )
-        return
+        static_failure = "async_jobs_unavailable"
+    elif not _is_readable_regular_file(config_path):
+        logger.error("Config file path is missing, unreadable, or not a regular file")
+        static_failure = "configuration_missing"
+    else:
+        await _bootstrap_async_job_storage(db_url, job_store)
 
-    if not config_path:
-        logger.error("Config file path not available - NAT_CONFIG_FILE not set")
+    if static_failure is not None:
+
+        @app.post(
+            "/v1/jobs/async/submit",
+            response_model=JobStatusResponse,
+            tags=["async jobs"],
+            summary="Submit a new async job",
+            description=(
+                "Submit a research query to a registered agent. Returns a job ID for tracking progress via SSE stream."
+            ),
+            responses={503: {"description": "Async job submission is unavailable"}},
+        )
+        async def unavailable_submit_job(
+            req: Annotated[JobSubmitRequest, Body(openapi_examples=JOB_SUBMIT_EXAMPLES)],
+            conversation_id: Annotated[str | None, Header(alias="conversation-id")] = None,
+        ) -> JobStatusResponse:
+            """Preserve request validation and authentication while startup is unavailable."""
+            require_verified_principal()
+            raise HTTPException(503, "Async job submission is currently unavailable")
+
+        logger.warning("Registered guarded async submit fallback: reason=%s", static_failure)
         return
 
     logger.info(
@@ -685,10 +831,6 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         db_url[:50],
         default_expiry_seconds,
     )
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, ensure_job_access_table, db_url)
-    await loop.run_in_executor(None, ensure_deep_research_admission_table, db_url)
-    await loop.run_in_executor(None, _validate_artifact_store, db_url)
 
     @app.post(
         "/v1/jobs/async/submit",
@@ -724,6 +866,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     )
     async def submit_job(
         req: Annotated[JobSubmitRequest, Body(openapi_examples=JOB_SUBMIT_EXAMPLES)],
+        conversation_id: Annotated[str | None, Header(alias="conversation-id")] = None,
     ) -> JobStatusResponse:
         """Submit a new async job for deep research or other registered agents."""
         try:
@@ -749,6 +892,17 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
         # is also forwarded to submit_authorized_job(...) below for ownership recording.
         principal = require_verified_principal()
+        readiness_failure = await _probe_async_job_readiness(
+            dask_available=dask_available,
+            job_store=job_store,
+            scheduler_address=scheduler_address,
+            db_url=db_url,
+            config_path=config_path,
+            submit_route_registered=submit_route_registered,
+        )
+        if readiness_failure is not None:
+            logger.warning("Rejected async job submission because readiness failed: %s", readiness_failure["reason"])
+            raise HTTPException(503, "Async job submission is currently unavailable")
         try:
             await require_content_encryption_ready_for_submission_async()
         except ContentEncryptionUnavailable as e:
@@ -807,6 +961,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 expiry_seconds=expiry,
                 data_sources=req.data_sources,
                 auth_token=auth_token,
+                conversation_id=conversation_id,
                 skip_encryption_readiness_check=True,
             )
         except ContentEncryptionUnavailable as e:
@@ -857,6 +1012,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             status=JobStatus.SUBMITTED.value,
             agent_type=req.agent_type,
         )
+
+    submit_route_registered = True
 
     @app.post(
         "/v1/jobs/async/job/{job_id}/report/edit",
@@ -1195,17 +1352,12 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     logger.info("Registered async job routes at /v1/jobs/async")
 
-    # Ensure job_events table exists before reaper runs (reaper queries it via raw SQL;
-    # table is otherwise created lazily on first EventStore write).
-    EventStore._ensure_table_exists(db_url)
-
     # Start the ghost job reaper background task
     asyncio.create_task(_reap_ghost_jobs(job_store, db_url))
 
-    # Start periodic cleanup of expired jobs (NAT's job_info table) and old events (job_events table).
-    # NAT provides periodic_cleanup as a Dask task for job_info, but it must be explicitly submitted.
-    # We also run a local asyncio task for job_events cleanup since NAT doesn't manage that table.
-    _start_periodic_cleanup(job_store, scheduler_address, db_url, default_expiry_seconds, log_level, use_threads)
+    # Run job metadata and event retention in the API process. A never-ending
+    # cleanup coroutine submitted to shared Dask would permanently occupy a worker.
+    _start_periodic_cleanup(job_store, db_url, default_expiry_seconds)
 
 
 GHOST_JOB_TIMEOUT_SECONDS = 300  # 5 minutes without events = ghost job
@@ -1368,58 +1520,35 @@ _cleanup_task: asyncio.Task | None = None
 _PG_ADVISORY_LOCK_ID = 0x41495143_4C45414E  # "AIQCLEAN" in hex
 
 
-def _start_periodic_cleanup(
-    job_store,
-    scheduler_address: str,
-    db_url: str,
-    expiry_seconds: int,
-    log_level: int,
-    use_threads: bool,
-) -> None:
-    """
-    Start periodic cleanup of expired jobs and old events.
-
-    Submits NAT's periodic_cleanup as a Dask task (handles job_info expiry)
-    and starts a local asyncio task for coordinated event cleanup.
-    """
+def _start_periodic_cleanup(job_store, db_url: str, expiry_seconds: int) -> None:
+    """Start local cleanup of expired jobs, events, access rows, and artifacts."""
     global _cleanup_task
 
-    # Cleanup interval: half the expiry time, clamped to [60s, 3600s]
+    # Cleanup interval: half the expiry time, clamped to [60s, 3600s].
     cleanup_interval = max(60, min(expiry_seconds // 2, 3600))
 
-    # Submit NAT's periodic_cleanup as a long-running Dask task for job_info table
-    try:
-        from dask.distributed import fire_and_forget
-
-        from nat.front_ends.fastapi.async_jobs import periodic_cleanup
-
-        cleanup_future = job_store.dask_client.submit(
-            periodic_cleanup,
-            scheduler_address=scheduler_address,
-            db_url=db_url,
-            sleep_time_sec=cleanup_interval,
-            configure_logging=not use_threads,
-            log_level=log_level,
-        )
-        fire_and_forget(cleanup_future)
-        logger.info(
-            "Submitted periodic job cleanup task to Dask (interval=%ds, expiry=%ds)",
-            cleanup_interval,
-            expiry_seconds,
-        )
-    except Exception as e:
-        logger.warning("Failed to submit periodic cleanup to Dask: %s", e)
-
-    # Start local asyncio task for job_events table cleanup (NAT doesn't manage this table).
-    # Uses pg_try_advisory_xact_lock on PostgreSQL so only one pod runs cleanup per cycle.
-    # Cancel any previously-started task before overwriting the reference.
+    # Keep housekeeping off the shared Dask cluster. NAT's periodic_cleanup is an
+    # infinite Dask task; with one thread per worker it consumes an entire worker
+    # slot for the lifetime of the deployment.
     if _cleanup_task and not _cleanup_task.done():
         _cleanup_task.cancel()
-    _cleanup_task = asyncio.create_task(_cleanup_old_events_loop(db_url, expiry_seconds, cleanup_interval))
+    _cleanup_task = asyncio.create_task(
+        _cleanup_old_events_loop(
+            db_url,
+            expiry_seconds,
+            cleanup_interval,
+            job_store=job_store,
+        )
+    )
+    logger.info(
+        "Started local periodic job and event cleanup (interval=%ds, expiry=%ds)",
+        cleanup_interval,
+        expiry_seconds,
+    )
 
 
 async def stop_periodic_cleanup() -> None:
-    """Cancel the event cleanup background task. Call from shutdown handler."""
+    """Cancel the local periodic cleanup task. Call from shutdown handler."""
     global _cleanup_task
     if _cleanup_task and not _cleanup_task.done():
         _cleanup_task.cancel()
@@ -1428,44 +1557,84 @@ async def stop_periodic_cleanup() -> None:
         except asyncio.CancelledError:
             pass
         _cleanup_task = None
-        logger.info("Event cleanup task cancelled")
+        logger.info("Periodic cleanup task cancelled")
 
 
-async def _cleanup_old_events_loop(db_url: str, retention_seconds: int, interval_seconds: int) -> None:
+async def _cleanup_old_events_loop(
+    db_url: str,
+    retention_seconds: int,
+    interval_seconds: int,
+    *,
+    job_store=None,
+) -> None:
     """
-    Background task that periodically deletes old events from the job_events table
-    and removes events for jobs already marked as expired in job_info.
+    Periodically expire finished jobs and clean their retained data.
 
-    On PostgreSQL, uses pg_try_advisory_xact_lock so only one pod runs cleanup per cycle
-    when multiple pods share the same database.
+    PostgreSQL cleanup cycles use an advisory lock so multiple API replicas do
+    not perform the same work. Job cleanup remains local to the API process and
+    therefore does not consume a shared Dask worker slot.
     """
 
     is_postgres = db_url.startswith("postgres")
 
     logger.info(
-        "Event cleanup task started (retention=%ds, interval=%ds, advisory_lock=%s)",
+        "Periodic cleanup task started (retention=%ds, interval=%ds, advisory_lock=%s)",
         retention_seconds,
         interval_seconds,
         is_postgres,
     )
 
     # Run once immediately on startup to catch anything that aged out during downtime.
+    await _run_local_cleanup_cycle(job_store, db_url, retention_seconds, is_postgres)
+
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            await _run_local_cleanup_cycle(job_store, db_url, retention_seconds, is_postgres)
+        except asyncio.CancelledError:
+            logger.info("Periodic cleanup task stopped")
+            break
+
+
+async def _run_local_cleanup_cycle(job_store, db_url: str, retention_seconds: int, is_postgres: bool) -> None:
+    """Run one isolated job-retention and event-retention cycle."""
+    if job_store is not None:
+        try:
+            expired = await _run_job_cleanup(job_store, is_postgres)
+            if expired:
+                logger.info("Expired jobs cleaned up: %d", expired)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("Job cleanup error: %s", e)
+
     try:
         await _run_event_cleanup(db_url, retention_seconds, is_postgres)
     except asyncio.CancelledError:
         raise
     except Exception as e:
-        logger.warning("Event cleanup startup run failed: %s", e)
+        logger.warning("Event cleanup error: %s", e)
 
-    while True:
-        try:
-            await asyncio.sleep(interval_seconds)
-            await _run_event_cleanup(db_url, retention_seconds, is_postgres)
-        except asyncio.CancelledError:
-            logger.info("Event cleanup task stopped")
-            break
-        except Exception as e:
-            logger.warning("Event cleanup error: %s", e)
+
+async def _run_job_cleanup(job_store, is_postgres: bool) -> int | None:
+    """Expire finished jobs once, with one PostgreSQL replica elected per cycle."""
+    if not is_postgres:
+        return await job_store.cleanup_expired_jobs()
+
+    from sqlalchemy import text
+
+    # NAT's scoped session is keyed by asyncio task. Hold the election lock in
+    # this task and run cleanup in a child task so it receives its own DB session.
+    async with job_store.session() as lock_session:
+        locked = (
+            await lock_session.execute(
+                text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+                {"lock_id": _PG_ADVISORY_LOCK_ID},
+            )
+        ).scalar()
+        if not locked:
+            return None
+        return await asyncio.create_task(job_store.cleanup_expired_jobs())
 
 
 async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: bool) -> None:
@@ -1481,8 +1650,8 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
 
     loop = asyncio.get_running_loop()
 
-    def _do_cleanup() -> tuple[int, int, int]:
-        """Delete expired events/jobs/access rows synchronously; return removal counts."""
+    def _do_cleanup() -> tuple[int, int, int, int]:
+        """Delete expired retained data synchronously; return removal counts."""
         from sqlalchemy import text
 
         engine = EventStore._get_or_create_sync_engine(db_url)
@@ -1497,7 +1666,7 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
                     {"lock_id": _PG_ADVISORY_LOCK_ID},
                 ).scalar()
                 if not locked:
-                    return (0, 0, 0)
+                    return (0, 0, 0, 0)
 
             # 1. Time-based: delete events older than retention period
             if is_postgres:
@@ -1521,23 +1690,30 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
             expired_deleted = expired_result.rowcount
             access_deleted = cleanup_job_access(db_url, conn=conn)
 
-            conn.commit()
-            return (time_deleted, expired_deleted, access_deleted)
+            # SQLite permits one writer at a time. Artifact cleanup uses its own
+            # connection, so release this connection's write lock first.
+            if not is_postgres:
+                conn.commit()
 
-    time_deleted, expired_deleted, access_deleted = await loop.run_in_executor(None, _do_cleanup)
+            # Artifact retention shares the job expiry boundary. Keep it inside
+            # the leader's advisory-lock transaction so non-leader replicas
+            # cannot run the same destructive cleanup concurrently.
+            artifacts_deleted = 0
+            try:
+                from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
 
-    # Artifact retention shares the job expiry boundary (best-effort; the artifacts
-    # table only exists when artifact capture has been used).
-    try:
-        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+                artifacts_deleted = build_artifact_store(db_url).cleanup_old_artifacts(retention_seconds)
+            except Exception as e:  # noqa: BLE001 - retention is best-effort
+                logger.debug("Artifact cleanup skipped (%s)", type(e).__name__)
 
-        artifacts_deleted = await loop.run_in_executor(
-            None, lambda: build_artifact_store(db_url).cleanup_old_artifacts(retention_seconds)
-        )
-        if artifacts_deleted:
-            logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)
-    except Exception as e:  # noqa: BLE001 - retention is best-effort
-        logger.debug("Artifact cleanup skipped: %s", e)
+            if is_postgres:
+                conn.commit()
+            return (time_deleted, expired_deleted, access_deleted, artifacts_deleted)
+
+    time_deleted, expired_deleted, access_deleted, artifacts_deleted = await loop.run_in_executor(None, _do_cleanup)
+
+    if artifacts_deleted:
+        logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)
 
     if time_deleted > 0 or expired_deleted > 0 or access_deleted > 0:
         logger.info(
@@ -1675,6 +1851,13 @@ def _process_artifact_update(
         url = data.get("url") or content
         if _is_valid_url(url):
             sources_cited.add(_normalize_url(url))
+    elif artifact_type == "output" and data.get("output_category") == "final_report":
+        final_cited_urls = data.get("cited_urls")
+        if isinstance(final_cited_urls, list):
+            # The verified final report is authoritative. Intermediate LLM
+            # output can contain citations that finalization later removes.
+            sources_cited.clear()
+            sources_cited.update(_normalize_url(url) for url in final_cited_urls if _is_valid_url(url))
 
     if content:
         outputs.append(

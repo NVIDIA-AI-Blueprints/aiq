@@ -331,11 +331,11 @@ values:
 
 ```yaml
         AIQ_EMBED_BASE_URL: http://nim-embedqa.ns-nim.svc.cluster.local:8000/v1
-        AIQ_EMBED_MODEL: nvidia/llama-nemotron-embed-vl-1b-v2
+        AIQ_EMBED_MODEL: nvidia/nemotron-3-embed-1b
 ```
 
 The embedding model dimension must match `OPENSEARCH_EMBEDDING_DIM` in the workflow config
-(default `2048` for `nvidia/llama-nemotron-embed-vl-1b-v2`). Mismatched dimensions surface
+(default `2048` for `nvidia/nemotron-3-embed-1b`). Mismatched dimensions surface
 as `mapper_parsing_exception` on the first ingest.
 
 ```bash

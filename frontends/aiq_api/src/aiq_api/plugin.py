@@ -38,7 +38,6 @@ import logging
 import os
 import signal
 from collections.abc import Callable
-from typing import override
 
 from fastapi import APIRouter
 from fastapi import FastAPI
@@ -52,6 +51,7 @@ from nat.front_ends.fastapi.fastapi_front_end_config import FastApiFrontEndConfi
 from nat.front_ends.fastapi.fastapi_front_end_plugin import FastApiFrontEndPlugin
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorkerBase
+from nat.utils.type_utils import override
 
 from .jobs.connection_manager import get_connection_manager
 from .jobs.event_store import EventStore
@@ -315,7 +315,9 @@ class AIQAPIPlugin(FastApiFrontEndPlugin):
 
     @override
     async def run(self) -> None:
-        if self.front_end_config.scheduler_address is not None:
+        scheduler_address = self.front_end_config.scheduler_address or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
+        if scheduler_address is not None:
+            self.front_end_config.scheduler_address = scheduler_address
             await super().run()
             return
 

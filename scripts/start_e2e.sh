@@ -19,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 UI_DIR="$PROJECT_ROOT/frontends/ui"
-VENV_DIR="$PROJECT_ROOT/.venv"
+VENV_DIR="${AIQ_VENV_DIR:-$PROJECT_ROOT/.venv}"
 PYTHON_BIN="$VENV_DIR/bin/python"
 NAT_BIN="$VENV_DIR/bin/nat"
 

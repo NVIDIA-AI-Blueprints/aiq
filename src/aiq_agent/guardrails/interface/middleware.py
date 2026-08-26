@@ -27,14 +27,24 @@ from nemoguardrails.rails.llm.options import GenerationOptions
 from nemoguardrails.rails.llm.options import GenerationResponse
 
 from aiq_agent.guardrails.dynamic_field_selection import DynamicFieldSelectionMixin
+from nat.builder.builder import Builder
 from nat.middleware.function_middleware import CallNextStream
 from nat.middleware.middleware import FunctionMiddlewareContext
 from nat.middleware.middleware import InvocationContext
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GuardrailsMiddleware
+from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware_config import GuardrailsMiddlewareConfig
 
 logger = logging.getLogger(__name__)
 
 _GUARDRAILS_FAILURE_REFUSAL = "I'm sorry, I can't help with that."
+_NEMO_GUARDRAILS_RUNTIME_LOGGER = "nemoguardrails.colang.v1_0.runtime.runtime"
+
+
+def _configure_nemo_guardrails_runtime_logging() -> None:
+    """Prevent NeMo Guardrails runtime context from being logged below WARNING."""
+    runtime_logger = logging.getLogger(_NEMO_GUARDRAILS_RUNTIME_LOGGER)
+    if runtime_logger.getEffectiveLevel() < logging.WARNING:
+        runtime_logger.setLevel(logging.WARNING)
 
 
 class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
@@ -44,6 +54,14 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
     adaptation hooks so concrete middleware can guard selected boundary fields
     while preserving the intercepted function's expected return schema.
     """
+
+    def __init__(self, config: GuardrailsMiddlewareConfig, builder: Builder) -> None:
+        """Initialize Guardrails with a safe default for dependency runtime logs."""
+        # NeMo Guardrails logs complete event/context payloads at INFO. Set the
+        # dependency logger before LLMRails construction so request content and
+        # credentials cannot be emitted during initialization or evaluation.
+        _configure_nemo_guardrails_runtime_logging()
+        super().__init__(config=config, builder=builder)
 
     async def pre_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run input rails and adapt blocked outputs for the intercepted boundary."""

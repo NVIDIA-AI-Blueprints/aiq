@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
@@ -27,15 +26,19 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.tools import BaseTool
+from nemo_relay.integrations.deepagents import NemoRelayDeepAgentsCallbackHandler
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
 from aiq_agent.common import validate_research_source_configuration
+from aiq_agent.common.citation_verification import CitationIntegrityError
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
+from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay import run_agent
 
 from .custom_middleware import FinalReportCommitTracker
 from .custom_middleware import SourceRegistryMiddleware
@@ -57,6 +60,7 @@ from .tools.source_tool_batching import reset_source_tool_budget
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_RESEARCH_CONCURRENCY = 6
+DEFAULT_MAX_RESEARCHER_MODEL_CALLS = 100
 PARENT_REPORT_CONTEXT_PATH = "/shared/parent_report_context.json"
 
 # Path to this agent's directory (for loading prompts)
@@ -73,7 +77,6 @@ class DeepResearcherAgent:
         llm_provider: LLMProvider,
         tools: Sequence[BaseTool] | None = None,
         *,
-        verbose: bool = True,
         callbacks: list[Any] | None = None,
         domain_catalog_path: str | None = None,
         enable_source_router: bool = True,
@@ -84,6 +87,7 @@ class DeepResearcherAgent:
         artifact_db_url: str | None = None,
         artifact_emit: Callable[[dict[str, Any]], None] | None = None,
         max_research_concurrency: int = DEFAULT_MAX_RESEARCH_CONCURRENCY,
+        max_researcher_model_calls: int = DEFAULT_MAX_RESEARCHER_MODEL_CALLS,
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
         max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
         resource_limits: DeepResearchResourceLimits | None = None,
@@ -94,7 +98,6 @@ class DeepResearcherAgent:
         Args:
             llm_provider: LLMProvider for role-based LLM access.
             tools: Optional sequence of LangChain tools for research.
-            verbose: Enable detailed logging.
             callbacks: Optional list of callbacks.
             domain_catalog_path: Optional YAML/JSON domain catalog path for source-router-agent.
             enable_source_router: Enable the advisory source-router-agent before planning.
@@ -104,15 +107,16 @@ class DeepResearcherAgent:
             job_id: Optional async job identifier used to scope sandbox backends.
             max_research_concurrency: Maximum ResearchQuery items accepted and run concurrently per
                 run_research_batch call.
+            max_researcher_model_calls: Maximum normal model turns per researcher worker before finalization.
             max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
             resource_limits: Hard per-job request, state, source-call, and wall-clock limits.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
-        self.verbose = verbose
         self.callbacks = callbacks or []
         self.max_research_concurrency = max_research_concurrency
+        self.max_researcher_model_calls = max_researcher_model_calls
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
         self.resource_limits = resource_limits or DeepResearchResourceLimits()
@@ -205,6 +209,7 @@ class DeepResearcherAgent:
             domain_catalog_path=self.domain_catalog_path,
             enable_source_router=self.enable_source_router,
             max_research_concurrency=self.max_research_concurrency,
+            max_researcher_model_calls=self.max_researcher_model_calls,
             resource_limits=self.resource_limits,
             final_report_tracker=final_report_tracker,
             state_budget=state_budget,
@@ -298,17 +303,30 @@ class DeepResearcherAgent:
         if messages:
             logger.info("=" * 80)
             logger.info("Deep Research Subagent: Starting workflow")
-            logger.info("Query: %s...", query[:100])
+            logger.info("Query: %s", log_content_metadata(query))
             logger.info("=" * 80)
 
-        budget_token = activate_source_tool_budget(self.resource_limits.max_source_tool_calls)
+        budget_token = activate_source_tool_budget(
+            self.resource_limits.max_source_tool_calls,
+            max_consecutive_failures=self.resource_limits.max_consecutive_source_tool_failures,
+        )
         try:
             execution_timeout = asyncio.timeout(self.resource_limits.max_execution_seconds)
             try:
                 async with execution_timeout:
-                    result = await agent.ainvoke(
-                        state,
-                        config={"callbacks": self.callbacks} if self.callbacks else None,
+
+                    async def _invoke_orchestrator() -> Any:
+                        callbacks = [*self.callbacks, NemoRelayDeepAgentsCallbackHandler()]
+                        return await agent.ainvoke(state, config={"callbacks": callbacks})
+
+                    result = await run_agent(
+                        "deep_research_agent",
+                        _invoke_orchestrator,
+                        input_value={
+                            "message_count": len(messages),
+                            "query_character_count": len(query),
+                            "file_count": len(state.files),
+                        },
                     )
             except TimeoutError as exc:
                 # An inner provider/tool may raise TimeoutError for its own operation.
@@ -352,6 +370,7 @@ class DeepResearcherAgent:
                 raise RuntimeError("writer_output_not_committed")
 
             # Post-process: verify citations against source registry
+            citation_registry = None
             if self.enable_citation_verification and self.source_registry_middleware.has_sources():
                 registry = self.source_registry_middleware.active_registry()
                 verification = verify_citations(
@@ -360,23 +379,12 @@ class DeepResearcherAgent:
                     reference_sources=self.source_registry_middleware.get_source_entries(mode="compact"),
                 )
                 if verification.removed_citations:
-                    removed_details = []
-                    for c in verification.removed_citations:
-                        url_match = re.search(r"https?://\S+", c.get("line", ""))
-                        url_str = url_match.group(0).rstrip(".,;)") if url_match else "(no url)"
-                        removed_details.append(f"[{c['number']}] {c['reason']}: {url_str}")
                     logger.info(
-                        "Citation verification removed %d invalid citation(s):\n  %s",
+                        "Citation verification removed %d invalid citation(s)",
                         len(verification.removed_citations),
-                        "\n  ".join(removed_details),
                     )
                 final_message = verification.verified_report
-                if not verification.valid_citations:
-                    logger.warning(
-                        "Citation verification found no valid citations in writer-agent output; "
-                        "returning the generated report without failing the job. "
-                        "This may indicate unsupported citation formatting or over-aggressive verification."
-                    )
+                citation_registry = registry
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
@@ -402,11 +410,23 @@ class DeepResearcherAgent:
                         exc_info=True,
                     )
 
+            final_cited_urls: list[str] | None = None
+            if citation_registry is not None:
+                final_verification = verify_citations(final_message, citation_registry)
+                if not final_verification.valid_citations:
+                    raise CitationIntegrityError()
+                final_message = final_verification.verified_report
+                final_cited_urls = list(
+                    dict.fromkeys(
+                        citation["url"] for citation in final_verification.valid_citations if citation.get("url")
+                    )
+                )
+
             # Re-emit the verified/sanitized report so the frontend overwrites
             # the raw version that on_llm_end auto-emitted during ainvoke().
             for cb in self.callbacks:
                 if hasattr(cb, "emit_final_report"):
-                    cb.emit_final_report(final_message)
+                    cb.emit_final_report(final_message, cited_urls=final_cited_urls)
                     break
 
             self._replace_last_message_content(result, final_message)
@@ -419,10 +439,18 @@ class DeepResearcherAgent:
 
         except EmptySourceRegistryError as ex:
             if ex.reason is not EmptySourceRegistryReason.NO_SOURCE_RESULTS:
-                logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
+                logger.error(
+                    "Deep Research Subagent failed (error_type=%s detail_%s)",
+                    type(ex).__name__,
+                    log_content_metadata(ex),
+                )
             raise
         except Exception as ex:
-            logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
+            logger.error(
+                "Deep Research Subagent failed (error_type=%s detail_%s)",
+                type(ex).__name__,
+                log_content_metadata(ex),
+            )
             raise
         finally:
             reset_source_tool_budget(budget_token)

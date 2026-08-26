@@ -24,7 +24,9 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 
+from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
 from aiq_agent.agents.chat_researcher.nodes.intent_classifier import IntentClassifier
 from aiq_agent.agents.chat_researcher.preclassification import preclassified_depth
 
@@ -85,6 +87,7 @@ class TestIntentClassifier:
         assert len(result["messages"]) == 1
         assert isinstance(result["messages"][0], AIMessage)
         assert result["messages"][0].content == "Hi there!"
+        assert "workflow_outcome" not in result
         mock_llm.ainvoke.assert_called_once()
 
     @pytest.mark.asyncio
@@ -169,6 +172,7 @@ class TestIntentClassifier:
         assert result["user_intent"].target == "new_research"
         assert result["user_intent"].use_parent_report_context is True
         assert result["depth_decision"].decision == "deep"
+        assert "workflow_outcome" not in result
 
     @pytest.mark.asyncio
     async def test_prompt_exposes_only_semantic_route_not_derived_workflow_fields(self, mock_llm):
@@ -343,9 +347,23 @@ class TestIntentClassifier:
         mock_llm.ainvoke.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_run_handles_llm_error(self, mock_llm):
-        """Test run() on LLM error returns meta + error message so flow ends (no clarifier)."""
-        mock_llm.ainvoke = AsyncMock(side_effect=Exception("LLM error"))
+    @pytest.mark.parametrize(
+        "provider_error",
+        [
+            pytest.param(RuntimeError("[400] private provider detail"), id="provider-4xx"),
+            pytest.param(RuntimeError("[500] private provider detail"), id="provider-5xx"),
+            pytest.param(ConnectionError("private provider detail"), id="connection"),
+            pytest.param(TimeoutError("private provider detail"), id="direct-timeout"),
+            pytest.param(
+                RuntimeError("upstream returned 504 Gateway Timeout: private provider detail"),
+                id="wrapped-timeout",
+            ),
+            pytest.param(RuntimeError("[404] private provider detail"), id="provider-unavailable"),
+        ],
+    )
+    async def test_run_marks_provider_failures_failed(self, mock_llm, provider_error):
+        """Provider failures end the graph with safe text and an explicit failed outcome."""
+        mock_llm.ainvoke = AsyncMock(side_effect=provider_error)
 
         classifier = IntentClassifier(llm=mock_llm)
         state = ChatResearcherState(messages=[HumanMessage(content="Test query")])
@@ -357,7 +375,14 @@ class TestIntentClassifier:
         assert "messages" in result
         assert len(result["messages"]) == 1
         assert isinstance(result["messages"][0], AIMessage)
-        assert "temporary error" in result["messages"][0].content
+        assert "private provider detail" not in result["messages"][0].content
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+        from aiq_agent.agents.chat_researcher.register import _render_workflow_response
+
+        response = _render_workflow_response(result, model="workflow")
+        assert response.workflow_outcome == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "private provider detail" not in response.model_dump_json()
 
     @pytest.mark.asyncio
     async def test_run_with_callbacks(self, mock_llm):
@@ -376,7 +401,8 @@ class TestIntentClassifier:
         # ainvoke(rendered_prompt, config=config)
         assert call_args[0][0]  # first positional arg is the prompt string
         config = call_args[1].get("config", {})
-        assert config.get("callbacks") == [mock_callback]
+        callbacks = config.get("callbacks")
+        assert callbacks == [mock_callback]
 
     @pytest.mark.asyncio
     async def test_run_does_not_pass_prior_report_content_to_classifier_llm(self, mock_llm):
@@ -442,10 +468,10 @@ class TestIntentClassifier:
         assert result["depth_decision"].decision == "deep"
 
     @pytest.mark.asyncio
-    async def test_run_invalid_json_fallback(self, mock_llm):
-        """Test run() on unparseable JSON returns fallback research + deep depth_decision."""
+    async def test_run_invalid_json_after_repair_marks_workflow_failed(self, mock_llm):
+        """Two malformed classifier responses stop instead of launching research."""
         mock_response = MagicMock()
-        mock_response.content = "not valid json at all"
+        mock_response.content = "not valid json at all with private provider detail"
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
         classifier = IntentClassifier(llm=mock_llm)
@@ -453,8 +479,11 @@ class TestIntentClassifier:
 
         result = await classifier.run(state)
 
-        assert result["user_intent"].intent == "research"
-        assert result["depth_decision"].decision == "deep"
+        assert mock_llm.ainvoke.call_count == 2
+        assert result["user_intent"].intent == "meta"
+        assert "depth_decision" not in result
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "private provider detail" not in result["messages"][0].content
 
     @pytest.mark.asyncio
     async def test_run_repairs_invalid_json_classifier_output(self, mock_llm):
@@ -485,6 +514,7 @@ class TestIntentClassifier:
         assert result["user_intent"].target == "new_research"
         assert result["user_intent"].use_parent_report_context is True
         assert result["depth_decision"].decision == "deep"
+        assert "workflow_outcome" not in result
 
     def test_load_default_prompt_fallback(self, mock_llm):
         """Test _load_default_prompt returns fallback when not found."""

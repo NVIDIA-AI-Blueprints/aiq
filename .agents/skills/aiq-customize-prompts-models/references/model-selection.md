@@ -15,12 +15,14 @@ an agent. Do not hard-code model names in Python.
 
 ```yaml
 llms:
-  nemotron_super_llm:
+  nemotron_ultra_llm:
     _type: nim
     model_name: <a capable model>
-  gpt_oss_llm:
+    max_tokens: 16384
+  nemotron_ultra_writer_llm:
     _type: nim          # `openai` is also supported (also takes model_name)
-    model_name: <a cheaper model>
+    model_name: <the same capable model>
+    max_tokens: 32768   # larger report-writing budget
 ```
 
 ## Assign a model to an agent role
@@ -54,11 +56,11 @@ There is **no** generic `llm` field on the deep research agent.
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm   # required; also the default for unset roles
-    source_router_llm: nemotron_super_llm
-    researcher_llm: nemotron_super_llm
-    planner_llm: gpt_oss_llm               # cheaper model for planning
-    writer_llm: gpt_oss_llm
+    orchestrator_llm: nemotron_ultra_llm   # required; also the default for unset roles
+    source_router_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
 ```
 
 This mirrors the real configs (for example

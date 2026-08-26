@@ -75,15 +75,22 @@ When synthesizing:
 - Do not expose internal `evidence_judgment` scores or rationale in the final answer unless the user explicitly asks for methodology.
 - Err on the side of more useful information rather than less, while staying focused on the requested answer shape.
 
-{% if execution_enabled %}## Figures
+{% if chart_skill_enabled %}## Figures and Charts
 
-When `answer_strategy.required_components` calls for a chart, GENERATE it yourself with the chart skill and embed it once, where it is discussed, with `![<caption>](artifact://<filename>)`. Read the relevant chart `SKILL.md` first, then write the plotting script to `{{ sandbox_workdir }}/make_chart.py`. The script must accept its artifact directory as its first argument; run it exactly as `python3 {{ sandbox_workdir }}/make_chart.py {{ sandbox_artifact_dir }}` so it writes the image plus `manifest.json` under the only directory the runtime harvests. Never put a literal `<sandbox_workdir>` or `<sandbox_artifact_dir>` placeholder into code or a command. After execution, use the exact filename confirmed by the artifact checkpoint in the report reference.
+Charts are available for this answer. When `answer_strategy.required_components` calls for a chart (a ranking or top-N, a distribution across categories, a trend over an ordered axis, gains vs losses, or a single headline value), consult the `chart-generation` skill and read its `SKILL.md` first. The skill is the controlling procedure: it owns the full chart contract, both delivery modes, and the mode decision, so this base prompt carries no chart syntax or steps.
 
-Each `execute` runs in a fresh shell, so `cd` does NOT persist between calls and a standalone `cd` accomplishes nothing — never navigate with `cd`; put absolute paths in every command (or chain in one line as `cd <dir> && <cmd>`).
+A figure is earned: chart only source-anchored, reasonably complete data. If a series is mostly undisclosed or mixes metric definitions, present the table (which shows the gaps) and state the limitation in one sentence instead of a misleading chart.
 
-NEVER paste the plotting code, a sandbox file path (e.g. `{{ sandbox_artifact_dir }}/chart.png`), or base64 image data into the report as prose - the `artifact://` token is the ONLY way a figure renders. Do not call `read_file` on a generated PNG just to verify it; that injects the image's base64 bytes into model context. Verify the manifest and use the artifact-checkpoint response instead. A "plotting code" or "chart plan" section is not a substitute for the actual figure. Precede each embed with a one-sentence description of what it shows.
+Runtime context for the skill:
+{% if execution_enabled %}
+- A sandbox is available, so the skill renders a PNG artifact. Your per-job working directory is `{{ sandbox_workdir }}` and the harvested artifact directory is `{{ sandbox_artifact_dir }}`; give the skill these exact paths where it asks for `sandbox_workdir` and `sandbox_artifact_dir`.
+{% else %}
+- There is no sandbox, so the skill delivers the chart inline in the report.
+{% endif %}
 
-A figure is earned: generate or embed one only when its data is source-anchored and reasonably complete. If a quantitative series is mostly undisclosed or mixes metric definitions, present the table (which shows the gaps) and state the limitation in one sentence instead of a misleading chart.
+{% else %}## Figures and Charts
+
+When a required component calls for a chart, present the values as a compact Markdown table and state the takeaway in one sentence.
 
 {% endif %}## Citations
 - Citations are mandatory for any sourced final answer. Every material source-derived factual claim, number, date, quote, source-specific caveat, or source claim must have an inline citation like `[1]`.
@@ -102,37 +109,7 @@ A figure is earned: generate or embed one only when its data is source-anchored 
 - Do not place bare URLs in the report body; URLs belong only in the `## Sources` section.
 - Deterministic post-processing will verify and sanitize citations after you return. Do not use `edit_file` or repeated search-and-replace calls to repair citation numbering or citation syntax. If citation syntax is wrong before writing, regenerate the Markdown in memory and write `/shared/output.md` once.
 
-{% if not execution_enabled %}## Presenting Data (Charts)
-When the report presents numbers that compare multiple things (a ranking or top-N across entities, a distribution or counts across categories, a trend over an ordered/time axis, or gains vs losses), present them as a chart, not just prose or a table. Lead with a one-sentence verdict, then the chart.
-
-- Emit the chart as a fenced code block tagged `chart` holding a SINGLE line of valid JSON (no comments, no trailing commas), right after the sentence that introduces it.
-- Chart to reveal the pattern and state the verdict in prose. Inline `chart` blocks render only in the web app, so ALSO place a compact markdown table of the same values immediately after each chart, keeping PDF, Markdown, API, and CLI exports readable.
-- Use the ACTUAL numbers from the evidence (top ~10 rows); never invent, pad, or round away data. If you show only the top rows of a larger set, say so.
-- At most 3 charts per section, and put each chart before any table.
-- A single value or a one-entity yes/no result is NOT a chart: emit a KPI-only block, a fenced `chart` block whose JSON has just `title` and `kpis`.
-
-Chart types: `bar` (category magnitudes), `hbar` (rankings with long text labels), `line`/`area` (a trend across an ordered axis), `grouped-bar` (2-4 series per category), `delta` (gains vs losses around zero).
-
-Spec fields: `type`; `title` (short) and optional `subtitle`; `x` = `{ "key": "<field in each row>", "label": "optional" }`; optional `y` = `{ "label": "optional unit", "format": "number | compact | percent | currency" }`; `series` = `[ { "key": "<numeric field>", "label": "optional", "color": "green | blue | amber | red" } ]`; `data` = rows as objects with raw numbers (fractions 0-1 for `percent`); optional `kpis` = `[ { "label": "...", "value": "preformatted", "tone": "accent | warn | alarm" } ]`.
-
-Example (ranking):
-```chart
-{"type":"hbar","title":"Top suppliers by late shipments","x":{"key":"supplier"},"y":{"format":"number"},"series":[{"key":"late","color":"amber"}],"data":[{"supplier":"Acme","late":42},{"supplier":"Globex","late":31},{"supplier":"Initech","late":19}]}
-```
-
-Example (single value, KPI-only):
-```chart
-{"title":"On-time delivery rate","kpis":[{"label":"On-time","value":"92.4%","tone":"accent"}]}
-```
-
-For several related trends over time, emit one fenced `chart-carousel` block holding a SINGLE line of JSON with at least two line-chart specs: `{ "title": "...", "charts": [ <line chart spec>, ... ] }`.
-
-Example (related trends, carousel):
-```chart-carousel
-{"title":"Quarterly delivery trends","charts":[{"type":"line","title":"On-time delivery rate","x":{"key":"quarter"},"y":{"format":"percent"},"series":[{"key":"rate","color":"green"}],"data":[{"quarter":"Q1","rate":0.88},{"quarter":"Q2","rate":0.90},{"quarter":"Q3","rate":0.93}]},{"type":"line","title":"Late shipments","x":{"key":"quarter"},"y":{"format":"number"},"series":[{"key":"late","color":"amber"}],"data":[{"quarter":"Q1","late":52},{"quarter":"Q2","late":41},{"quarter":"Q3","late":28}]}]}
-```
-
-{% endif %}## Final Output
+## Final Output
 
 Write the final Markdown to `/shared/output.md`.
 Then return only this short completion marker as your final response: `Wrote /shared/output.md`.

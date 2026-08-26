@@ -96,7 +96,6 @@ Configured through `ClarifierConfig` (NeMo Agent Toolkit type name: `clarifier_a
 | `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Tools for context gathering (for example, web search) |
 | `max_turns` | `int` | `3` | Maximum clarification Q&A turns before auto-completing |
 | `log_response_max_chars` | `int` | `2000` | Maximum characters to log from LLM responses |
-| `verbose` | `bool` | `false` | Enable verbose logging with `VerboseTraceCallback` |
 
 **Example YAML:**
 
@@ -108,7 +107,6 @@ functions:
     tools:
       - web_search_tool
     max_turns: 3
-    verbose: true
 ```
 
 ## Prompt Templates

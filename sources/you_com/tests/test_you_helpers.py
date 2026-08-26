@@ -16,6 +16,7 @@
 """Tests for shared helpers and tool registration smoke tests."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -29,6 +30,18 @@ from you_com.register import _make_stub
 from you_com.register import _resolve_api_key
 from you_com.register import _run_with_retries
 from you_com.register import _warn_missing_key_once
+
+
+class _StatusError(RuntimeError):
+    def __init__(self, status_code: int):
+        super().__init__(f"private provider detail for {status_code}")
+        self.status_code = status_code
+
+
+class _NestedStatusError(RuntimeError):
+    def __init__(self, status_code: int):
+        super().__init__(f"private provider detail for {status_code}")
+        self.response = SimpleNamespace(status_code=status_code)
 
 
 @pytest.fixture(autouse=True)
@@ -176,11 +189,66 @@ class TestRunWithRetries:
         assert out.startswith("Error: ")
 
     async def test_401_returns_friendly_message(self, monkeypatch):
-        monkeypatch.setattr("you_com.register.asyncio.sleep", AsyncMock())
+        sleep = AsyncMock()
+        monkeypatch.setattr("you_com.register.asyncio.sleep", sleep)
         factory = AsyncMock(side_effect=RuntimeError("401 Unauthorized"))
         cache: dict = {}
-        out = await _run_with_retries("T", factory, "q", max_retries=1, timeout=None, cache=cache)
+        out = await _run_with_retries("T", factory, "q", max_retries=3, timeout=None, cache=cache)
         assert "401" in out
+        assert factory.call_count == 1
+        sleep.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("error", "status"),
+        [
+            (_StatusError(401), 401),
+            (_StatusError(403), 403),
+            (_NestedStatusError(401), 401),
+            (_NestedStatusError(403), 403),
+            (RuntimeError("wrapped response status 401: private provider detail"), 401),
+            (RuntimeError("wrapped response status 403: private provider detail"), 403),
+            (RuntimeError("wrapped Unauthorized response: private provider detail"), 401),
+            (RuntimeError("wrapped Forbidden response: private provider detail"), 403),
+            (RuntimeError("https://api.you.com:443 returned 401 Unauthorized: private provider detail"), 401),
+        ],
+    )
+    async def test_auth_failures_return_sanitized_without_retry_or_sleep(self, monkeypatch, error, status):
+        sleep = AsyncMock()
+        monkeypatch.setattr("you_com.register.asyncio.sleep", sleep)
+        factory = AsyncMock(side_effect=error)
+
+        out = await _run_with_retries("Web search", factory, "q", max_retries=3, timeout=None, cache={})
+
+        assert str(status) in out
+        assert "private provider detail" not in out
+        assert factory.call_count == 1
+        sleep.assert_not_awaited()
+
+    async def test_wrapped_status_fallback_is_bounded(self, monkeypatch):
+        sleep = AsyncMock()
+        monkeypatch.setattr("you_com.register.asyncio.sleep", sleep)
+        factory = AsyncMock(side_effect=[RuntimeError(f"{'x' * 513} 401"), "recovered"])
+
+        out = await _run_with_retries("T", factory, "q", max_retries=2, timeout=None, cache={})
+
+        assert out == "recovered"
+        assert factory.call_count == 2
+        sleep.assert_awaited_once()
+
+    @pytest.mark.parametrize(
+        "url",
+        ["https://api.you.com/items/401", "https://api.you.com/items?status=403"],
+    )
+    async def test_url_status_number_does_not_disable_transient_retry(self, monkeypatch, url):
+        sleep = AsyncMock()
+        monkeypatch.setattr("you_com.register.asyncio.sleep", sleep)
+        factory = AsyncMock(side_effect=[RuntimeError(f"connection reset fetching {url}"), "recovered"])
+
+        out = await _run_with_retries("T", factory, "q", max_retries=2, timeout=None, cache={})
+
+        assert out == "recovered"
+        assert factory.call_count == 2
+        sleep.assert_awaited_once()
 
     async def test_timeout_applied(self):
         async def _hang(_q):

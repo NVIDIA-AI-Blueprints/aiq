@@ -39,6 +39,9 @@ uv audit --preview-features audit-command,json-output \
 uv audit --preview-features audit-command,json-output \
   --project mcp --frozen --no-dev --no-default-groups \
   --ignore-until-fixed GHSA-f4j7-r4q5-qw2c \
+  --ignore-until-fixed GHSA-2wm9-hf6c-p5cr \
+  --ignore-until-fixed GHSA-36p7-vc44-83pf \
+  --ignore-until-fixed GHSA-xph7-9rjv-w5fr \
   --output-format json >/dev/null
 ```
 
@@ -56,13 +59,16 @@ gate.
 
 ## No-fix vulnerability exception
 
-One canonical exception is accepted only while the advisory service reports no
-fixed release. The `--ignore-until-fixed` form automatically turns the
+The following exceptions are accepted only while the advisory service reports
+no fixed release. The `--ignore-until-fixed` form automatically turns an
 exception back into a failure when a fix becomes available.
 
 | Advisory | Transitive package | MCP reachability and compensating control |
 |----------|--------------------|--------------------------------------------|
 | `GHSA-f4j7-r4q5-qw2c` | ChromaDB | Present through the optional knowledge-layer backend. `config_mcp.yml` has no knowledge-retrieval function and the MCP application does not mount the Chroma server API named by the advisory. |
+| `GHSA-2wm9-hf6c-p5cr` | ChromaDB | Requires an authenticated Chroma API user. The MCP profile has no knowledge-retrieval function and does not expose or mount the Chroma server API. |
+| `GHSA-36p7-vc44-83pf` | ChromaDB | Requires an authenticated Chroma API user with collection-update permission. The MCP profile has no knowledge-retrieval function and does not expose or mount the Chroma server API. |
+| `GHSA-xph7-9rjv-w5fr` | ChromaDB | Applies to ChromaDB's `SimpleRBACAuthorizationProvider`. The MCP profile has no knowledge-retrieval function and does not expose or mount the Chroma server API. |
 
 The exact public function allowlist is enforced by
 `mcp/tests/test_config_and_packaging.py`. Removing this transitive package
@@ -82,21 +88,35 @@ vulnerability. New vulnerability records still fail the required CI check.
 
 ## Security dependency override
 
-The isolated MCP lock installs `cryptography==48.0.1` to replace the vulnerable
-OpenSSL bundled in earlier wheels. `nvidia-nat-core==1.8.0` and
-`oci==2.178.0` still declare upper bounds below 47, so the MCP project's uv
-override intentionally supersedes those stale bounds. The MCP config does not
-enable OCI or NAT authentication. The root AI-Q lock is separate and keeps
-`cryptography>=46.0.6,<47` so its environment remains within NAT's declared
-range.
+The isolated MCP lock installs `cryptography==50.0.0` to replace vulnerable
+earlier releases. `langchain-litellm==0.6.6` still declares an upper bound below
+49, while `nvidia-nat-core==1.8.0` and `oci==2.178.0` declare upper bounds below
+47, so the MCP project's uv override intentionally supersedes those stale
+bounds. The MCP config does not enable OCI or NAT authentication. The root AI-Q
+lock is separate and keeps `cryptography>=46.0.6,<47` so its environment remains
+within NAT's declared range.
 
 This override is security policy for the frozen MCP project and release
 container, not a functional requirement of MCP or a published package
-constraint. Only the frozen `mcp/uv.lock` profile carries the audited 48.0.1
+constraint. Only the frozen `mcp/uv.lock` profile carries the audited 50.0.0
 guarantee.
 
+### Platform compatibility
+
+The audited MCP release profile is supported on Linux x86_64 with CPython 3.13. The required CI job creates and
+imports that exact frozen environment, then builds and boots the release container on the same platform. Running
+the frozen source project on other 64-bit hosts is a development convenience, not a release-validated distribution
+path.
+
+The upgrade to `cryptography==50.0.0` crosses the 49.0.0 compatibility boundary, which removed x86_64 macOS and
+32-bit Windows wheels. Those platforms are not supported by this frozen profile; run the Linux release container
+on a supported 64-bit Linux/container host. This platform narrowing does not affect the root AI-Q environment,
+which remains on NAT's declared `cryptography>=46.0.6,<47` range. Publishing or claiming support for another target
+requires a target-specific frozen-environment import check, vulnerability audit, license inventory, and protocol
+smoke.
+
 `mcp/scripts/check_runtime_dependencies.py` performs the full installed
-requirement check and permits only those two exact owner/version/dependency/
+requirement check and permits only those three exact owner/version/dependency/
 specifier tuples. It fails on any other incompatibility and also fails when an
 upstream release makes an exception stale. The release image runs the same
 script with `--verify-imports`, which additionally imports every runtime
