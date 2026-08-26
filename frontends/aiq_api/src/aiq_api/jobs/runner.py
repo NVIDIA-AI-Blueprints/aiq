@@ -634,6 +634,7 @@ async def run_agent_job(
     output_metadata: dict[str, Any] | None = None,
     owner_user_id: str | None = None,
     admission_token: str | None = None,
+    database_name: str | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -962,6 +963,7 @@ async def run_agent_job(
                                 data_sources=data_sources,
                                 event_store=event_store,
                                 initial_files=initial_files,
+                                database_name=database_name,
                             )
 
                         result = await run_relay_workflow(
@@ -1358,6 +1360,7 @@ async def _run_agent(
     data_sources: list[str] | None = None,
     event_store: EventStore | None = None,
     initial_files: dict[str, Any] | None = None,
+    database_name: str | None = None,
 ) -> Any:
     """
     Run the agent, supporting different run() signatures.
@@ -1396,6 +1399,10 @@ async def _run_agent(
                 state_kwargs["data_sources"] = data_sources
             if initial_files and has_fields and "files" in state_cls.model_fields:
                 state_kwargs["files"] = initial_files
+            # A router-resolved database scope is authoritative for the request, so the
+            # worker must not fall back to the agent's configured default.
+            if database_name and has_fields and "database_name" in state_cls.model_fields:
+                state_kwargs["database_name"] = database_name
             if available_documents:
                 # Convert dicts to AvailableDocument if the state class expects them
                 try:
@@ -1417,6 +1424,8 @@ async def _run_agent(
                 state["data_sources"] = data_sources
             if initial_files:
                 state["files"] = initial_files
+            if database_name:
+                state["database_name"] = database_name
             if available_documents:
                 state["available_documents"] = available_documents
 

@@ -656,6 +656,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     principal=principal,
                     data_sources=state.data_sources,
                     auth_token=get_auth_token(),
+                    # A database-scoped request always routes Hybrid, so the scope must
+                    # survive into the worker or the job queries the configured default.
+                    database_name=state.database_name,
                 )
 
             deep_research_job_submitter = _submit_deep_job

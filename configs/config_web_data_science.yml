@@ -61,7 +61,10 @@ function_groups:
     auth:
       mode: password
       email: ${GSF_EMAIL}
-      password: ${GSF_PASSWORD}
+      # This field takes the NAME of the env var holding the password, not the
+      # password itself. Using ${GSF_PASSWORD} here resolves to the secret and
+      # GSF then looks up an env var by that value, silently disabling the tools.
+      password: GSF_PASSWORD  # pragma: allowlist secret
     include:
       - catalog_search
       - text_to_sql

@@ -253,3 +253,78 @@ async def test_list_agents_exposes_data_science_when_configured() -> None:
 
     assert response.status_code == 200
     assert [agent["agent_type"] for agent in response.json()["agents"]] == ["data_science"]
+
+
+class TestDatabaseScopePropagation:
+    """A router-resolved database scope must survive into the worker.
+
+    A request carrying ``database_name`` always takes the Hybrid path, so this is
+    exactly the path that must not lose its scope: rebuilding agent state without
+    it silently queries the agent's configured default instead.
+    """
+
+    class _ScopedAgent:
+        """Minimal state-based agent, matching the DS agent's run signature."""
+
+        def __init__(self):
+            self.seen = None
+
+        async def run(self, state):
+            self.seen = state
+            return state
+
+    @staticmethod
+    def _state_cls():
+        from aiq_agent.agents.data_science.models import DataScienceAgentState
+
+        return DataScienceAgentState
+
+    @pytest.mark.asyncio
+    async def test_database_name_reaches_agent_state(self, monkeypatch) -> None:
+        from aiq_api.jobs import runner as runner_module
+
+        agent = self._ScopedAgent()
+        monkeypatch.setattr(runner_module, "_get_agent_state_class", lambda _a: self._state_cls())
+        monkeypatch.setattr(
+            runner_module,
+            "run_with_cancellation",
+            lambda coro, _monitor, event_store=None: coro,
+        )
+
+        result = await runner_module._run_agent(
+            agent=agent,
+            input_text="Which state has the most orders?",
+            monitor=SimpleNamespace(),
+            database_name="northwind",
+        )
+
+        assert result.database_name == "northwind"
+        assert agent.seen.database_name == "northwind"
+
+    @pytest.mark.asyncio
+    async def test_unscoped_request_leaves_database_name_unset(self, monkeypatch) -> None:
+        from aiq_api.jobs import runner as runner_module
+
+        agent = self._ScopedAgent()
+        monkeypatch.setattr(runner_module, "_get_agent_state_class", lambda _a: self._state_cls())
+        monkeypatch.setattr(
+            runner_module,
+            "run_with_cancellation",
+            lambda coro, _monitor, event_store=None: coro,
+        )
+
+        result = await runner_module._run_agent(
+            agent=agent,
+            input_text="Which state has the most orders?",
+            monitor=SimpleNamespace(),
+        )
+
+        assert result.database_name is None
+
+    def test_submit_agent_job_accepts_a_database_scope(self) -> None:
+        """Guards the submission boundary: a missing parameter would be a silent drop."""
+        import inspect
+
+        from aiq_api.jobs.submit import submit_agent_job
+
+        assert "database_name" in inspect.signature(submit_agent_job).parameters
