@@ -19,6 +19,7 @@ import asyncio
 import os
 
 from pydantic import SecretStr
+from tavily_web_fetch.formatting import WRAP_WIDTH
 from tavily_web_fetch.register import FetchUrlInput
 from tavily_web_fetch.register import TavilyWebFetchToolConfig
 from tavily_web_fetch.register import tavily_web_fetch
@@ -119,6 +120,21 @@ class TestTavilyAdapter:
         assert not out.startswith("Error:")
         assert 'status="ok"' in out
 
+    async def test_case_sensitive_paths_remain_distinct(self, fake_tavily):
+        uppercase_path = "https://a.example/Doc"
+        lowercase_path = "https://a.example/doc"
+        fake_tavily.ainvoke.return_value = {
+            "results": [
+                extract_result(uppercase_path, raw_content="uppercase page"),
+                extract_result(lowercase_path, raw_content="lowercase page"),
+            ]
+        }
+
+        out = await _call(TavilyWebFetchToolConfig(), fake_tavily, [uppercase_path, lowercase_path])
+
+        assert out.count("uppercase page") == 1
+        assert out.count("lowercase page") == 1
+
 
 class TestResultShape:
     async def test_all_urls_failing_leads_with_error(self, fake_tavily):
@@ -148,13 +164,14 @@ class TestResultShape:
         assert 'status="ok"' in out
 
     async def test_per_call_budget_is_spent_in_request_order(self, fake_tavily):
+        # The first page consumes the call budget, leaving the second below one wrapped line.
         fake_tavily.ainvoke.return_value = {
             "results": [
-                extract_result(URL_A, raw_content="A" * 900),
-                extract_result(URL_B, raw_content="B" * 900),
+                extract_result(URL_A, raw_content="A " * 600),
+                extract_result(URL_B, raw_content="B " * 600),
             ]
         }
-        config = TavilyWebFetchToolConfig(max_chars_per_page=800, max_chars_per_call=800)
+        config = TavilyWebFetchToolConfig(max_chars_per_page=WRAP_WIDTH, max_chars_per_call=WRAP_WIDTH)
         out = await _call(config, fake_tavily, [URL_A, URL_B])
         assert 'status="skipped"' in out
         assert out.index(URL_A) < out.index(URL_B)
@@ -168,8 +185,11 @@ class TestResultShape:
 class TestRegistration:
     async def test_parser_registration_is_idempotent(self, fake_tavily, monkeypatch):
         calls = []
+        from tavily_web_fetch import register as register_module
+
         from aiq_agent.common import citation_verification
 
+        monkeypatch.setattr(register_module, "_parser_registered", False)
         monkeypatch.setattr(
             citation_verification, "register_source_parser", lambda matcher, parser: calls.append(parser)
         )
@@ -177,6 +197,43 @@ class TestRegistration:
         for _ in range(3):
             await _call(TavilyWebFetchToolConfig(), fake_tavily, [URL_A])
         assert len(calls) == 1
+
+    async def test_outbound_links_are_not_citable_under_any_instance_name(self, fake_tavily, monkeypatch):
+        # The parser is registered before NAT applies the operator's YAML key, so it must key on
+        # the output marker. Driving the real dispatcher is the only way to catch a name mismatch:
+        # calling parse_fetched_pages directly hides it by hand-passing the name.
+        from tavily_web_fetch import register as register_module
+
+        from aiq_agent.common import citation_verification
+
+        monkeypatch.setattr(citation_verification, "_PARSER_REGISTRY", [], raising=False)
+        monkeypatch.setattr(register_module, "_parser_registered", False)
+
+        body = "Real content.\nSee also https://outbound-never-fetched.example/page for more."
+        fake_tavily.ainvoke.return_value = {"results": [extract_result(URL_A, raw_content=body)]}
+        rendered = await _call(TavilyWebFetchToolConfig(), fake_tavily, [URL_A])
+
+        for instance_name in ("fetch_url_tool", "my_reader", "tavily_web_fetch"):
+            sources = citation_verification.extract_sources_from_tool_result(instance_name, rendered)
+            assert [entry.url for entry in sources] == [URL_A], instance_name
+
+    async def test_other_tools_still_reach_the_generic_extractor(self, fake_tavily, monkeypatch):
+        # The matcher accepts every name, so declining unfamiliar output is what keeps other tools
+        # working.
+        from tavily_web_fetch import register as register_module
+
+        from aiq_agent.common import citation_verification
+
+        monkeypatch.setattr(citation_verification, "_PARSER_REGISTRY", [], raising=False)
+        monkeypatch.setattr(register_module, "_parser_registered", False)
+
+        fake_tavily.ainvoke.return_value = {"results": [extract_result(URL_A)]}
+        await _call(TavilyWebFetchToolConfig(), fake_tavily, [URL_A])
+
+        sources = citation_verification.extract_sources_from_tool_result(
+            "web_search_tool", "Result: https://x.example/1 and https://y.example/2"
+        )
+        assert [entry.url for entry in sources] == ["https://x.example/1", "https://y.example/2"]
 
     async def test_description_keeps_the_search_versus_fetch_contrast(self, fake_tavily):
         async with tavily_web_fetch(TavilyWebFetchToolConfig(), None) as info:

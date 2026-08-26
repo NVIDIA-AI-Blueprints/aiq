@@ -526,7 +526,7 @@ def get_session_registry() -> SourceRegistry | None:
 # Parser registry
 # ---------------------------------------------------------------------------
 
-SourceParser = Callable[[str, str], list[SourceEntry]]
+SourceParser = Callable[[str, str], list[SourceEntry] | None]
 
 _PARSER_REGISTRY: list[tuple[Callable[[str], bool], SourceParser]] = []
 
@@ -537,9 +537,13 @@ def register_source_parser(
 ) -> None:
     """Register a parser for a tool name pattern.
 
+    A parser may return ``None`` to decline content it does not own, in which case the search
+    continues with the next registered parser and then the generic fallback. Declining lets a
+    parser key on its own output shape when the configured tool name is not knowable in advance.
+
     Args:
         match_fn: Predicate on lowercase tool name.
-        parser_fn: (content, tool_name) -> list[SourceEntry]
+        parser_fn: (content, tool_name) -> list[SourceEntry] or None to decline.
     """
     _PARSER_REGISTRY.append((match_fn, parser_fn))
 
@@ -583,10 +587,14 @@ def extract_sources_from_tool_result(
     for match_fn, parser_fn in _PARSER_REGISTRY:
         if match_fn(name_lower):
             try:
-                return parser_fn(content, tool_name)
+                entries = parser_fn(content, tool_name)
             except Exception:
                 logger.warning("Parser failed for tool %s, falling back to generic", tool_name, exc_info=True)
                 break
+            # None means the parser declined this content; keep looking so a later parser or the
+            # generic fallback can claim it.
+            if entries is not None:
+                return entries
     # Generic fallback: extract all URLs from content
     entries = _parse_generic_urls(content, tool_name)
     if entries:

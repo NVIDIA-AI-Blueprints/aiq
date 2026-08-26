@@ -34,6 +34,7 @@ from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
 from nat.data_models.function import FunctionBaseConfig
 
+from .formatting import WRAP_WIDTH
 from .formatting import FetchedPage
 from .formatting import compact
 from .formatting import parse_fetched_pages
@@ -45,7 +46,7 @@ from .formatting import select_window
 logger = logging.getLogger(__name__)
 
 _missing_key_warned = False
-_registered_parsers: set[str] = set()
+_parser_registered = False
 
 _SOFT_404_MARKERS = (
     "page not found",
@@ -97,15 +98,16 @@ class TavilyWebFetchToolConfig(FunctionBaseConfig, name="tavily_web_fetch"):
     max_urls_per_call: int = Field(default=4, ge=1, description="Maximum URLs accepted in one call")
     max_chars_per_page: int = Field(
         default=10000,
-        ge=500,
+        ge=WRAP_WIDTH,
         description=(
             "Maximum characters shown per page. This is a prompt-context budget, not a download "
-            "limit: pages are extracted in full and then windowed."
+            "limit: pages are extracted in full and then windowed. The floor is one wrapped line, "
+            "so a window always holds at least one whole line."
         ),
     )
     max_chars_per_call: int = Field(
         default=24000,
-        ge=500,
+        ge=WRAP_WIDTH,
         description="Maximum characters shown across all URLs in one call, spent in request order.",
     )
     extract_depth: str = Field(
@@ -173,7 +175,7 @@ def _page_from_result(requested: str, result: dict) -> FetchedPage:
 
 def _normalize(url: str) -> str:
     """Return a URL comparison key tolerant of trailing slashes."""
-    return url.strip().rstrip("/").lower()
+    return url.strip().rstrip("/")
 
 
 async def _extract(tool, urls: list[str], *, extract_depth: str, timeout_seconds: int) -> tuple[list[dict], str]:
@@ -207,12 +209,6 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
     if not os.environ.get("TAVILY_API_KEY") and tool_config.api_key:
         os.environ["TAVILY_API_KEY"] = tool_config.api_key.get_secret_value()
 
-    tool_name = tool_config.type
-    try:
-        tool_name = tool_config.name or tool_config.type
-    except AttributeError:  # pragma: no cover - older NAT config shapes
-        pass
-
     if not os.environ.get("TAVILY_API_KEY"):
         global _missing_key_warned
         if not _missing_key_warned:
@@ -234,14 +230,17 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
         return
 
     # Replace the generic URL scraper so outbound links do not become sources the agent never read.
-    if tool_name not in _registered_parsers:
+    # Match on our own output marker rather than the tool name: the callable name is the operator's
+    # YAML key, which NAT applies after this build function runs, so a name-based matcher would
+    # never fire. ``parse_fetched_pages`` returns None for output that is not ours, which lets the
+    # registry fall through to the next parser or the generic extractor.
+    global _parser_registered
+    if not _parser_registered:
         try:
             from aiq_agent.common.citation_verification import register_source_parser
 
-            register_source_parser(
-                lambda name, registered_name=tool_name.lower(): name == registered_name, parse_fetched_pages
-            )
-            _registered_parsers.add(tool_name)
+            register_source_parser(lambda _name: True, parse_fetched_pages)
+            _parser_registered = True
         except ImportError:  # pragma: no cover - package used outside an AI-Q install
             logger.debug("aiq_agent not importable; skipping source-parser registration")
 
@@ -285,7 +284,7 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
             )
         if len(requested) > tool_config.max_urls_per_call:
             return (
-                f"Error: {tool_name} accepts at most {tool_config.max_urls_per_call} URLs per call; "
+                f"Error: this tool accepts at most {tool_config.max_urls_per_call} URLs per call; "
                 f"received {len(requested)}. Split them across calls, most important first."
             )
 
@@ -330,17 +329,19 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
             if page is None:  # pragma: no cover - every requested URL receives a result above
                 continue
             if page.status == "failed":
-                sections.append(render_page_section(page, None, tool_name=tool_name))
+                sections.append(render_page_section(page, None))
                 continue
 
             any_success = True
             budget = min(tool_config.max_chars_per_page, remaining)
-            if budget <= 0:
+            # Skip rather than render a sliver: a window narrower than one wrapped line could not
+            # hold a whole line, and windowing never splits one.
+            if budget < WRAP_WIDTH:
                 sections.append(render_skipped_section(page, max_chars_per_call=tool_config.max_chars_per_call))
                 continue
             window = select_window(page.text, max_chars=budget, query=query or "", start_line=start_line)
             remaining -= window.shown_chars
-            sections.append(render_page_section(page, window, tool_name=tool_name))
+            sections.append(render_page_section(page, window))
 
         if not any_success:
             # The prefix keeps a wholly failed fetch non-citable and feeds the source-tool circuit breaker.

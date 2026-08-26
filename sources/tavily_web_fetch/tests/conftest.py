@@ -41,4 +41,4 @@ def _reset_module_state(monkeypatch):
     from tavily_web_fetch import register
 
     monkeypatch.setattr(register, "_missing_key_warned", False)
-    monkeypatch.setattr(register, "_registered_parsers", set())
+    monkeypatch.setattr(register, "_parser_registered", False)

@@ -206,7 +206,7 @@ functions:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `max_urls_per_call` | `int` | `4` | Maximum URLs accepted in a single call. |
-| `max_chars_per_page` | `int` | `10000` | Maximum characters shown per page. A prompt-context budget, not a download limit: pages are extracted in full and then windowed. |
+| `max_chars_per_page` | `int` | `10000` | Maximum characters shown per page. A prompt-context budget, not a download limit: pages are extracted in full and then windowed. Minimum `1000`, so a window always holds at least one whole line. |
 | `max_chars_per_call` | `int` | `24000` | Maximum characters shown across all URLs in one call, spent in request order. |
 | `extract_depth` | `str` | `"advanced"` | Tavily extraction depth: `basic` or `advanced`. |
 | `timeout_seconds` | `int` | `30` | Per-call extraction timeout in seconds. |

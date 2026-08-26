@@ -689,6 +689,20 @@ class TestParserDispatcher:
         assert entries[0].url == "https://custom.com"
         assert entries[0].source_type == "custom"
 
+    def test_parser_returning_none_declines_and_the_search_continues(self):
+        """A parser that returns None hands the content on instead of claiming it.
+
+        This lets a parser key on its own output shape when the configured tool name is not
+        knowable at registration time, without swallowing every other tool's results.
+        """
+
+        def _declines_everything(content: str, tool_name: str) -> list[SourceEntry] | None:
+            return None
+
+        register_source_parser(lambda name: True, _declines_everything)
+        entries = extract_sources_from_tool_result("some_tool", "See https://fallback.example/page")
+        assert [entry.url for entry in entries] == ["https://fallback.example/page"]
+
 
 # ---------------------------------------------------------------------------
 # verify_citations tests

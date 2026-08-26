@@ -36,6 +36,9 @@ urls=["https://example.com/report.pdf"], query="table 2.2"
 Results contain one `<fetched_page>` section per URL. Only successfully fetched pages enter AI-Q's citation registry;
 soft 404s, failures, skipped pages, and outbound links in page content are not registered as sources.
 
+Long lines are wrapped when a page is read, and a window always contains whole lines. The truncation note therefore
+reports exactly what was shown, and `start_line` reaches every character of the page.
+
 ## Security
 
 This tool places full third-party web page content into the model context. It is disabled by
