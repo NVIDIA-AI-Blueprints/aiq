@@ -51,7 +51,14 @@ def _secret_from_env(name: str) -> SecretStr | None:
 
 
 # Type-safe backend selection - Pydantic validates at config load time
-BackendType = Literal["llamaindex", "foundational_rag", "opensearch", "azure_ai_search"]
+BackendType = Literal[
+    "llamaindex",
+    "foundational_rag",
+    "opensearch",
+    "azure_ai_search",
+    "nemo_retriever",
+    "nemo_retriever_local",
+]
 OpenSearchAuthType = Literal["none", "basic", "sigv4"]
 OpenSearchAwsService = Literal["aoss", "es"]
 OpenSearchIngestionMode = Literal["local", "dask", "auto"]
@@ -96,6 +103,10 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
     backend: BackendType = Field(default="llamaindex", description="Knowledge backend to use")
     collection_name: str = Field(default="default", description="Name of the collection/index to search")
     top_k: int = Field(default=5, description="Number of results to return")
+    backend_config: dict[str, object] = Field(
+        default_factory=dict,
+        description="Backend-owned configuration passed unchanged to the selected knowledge adapter.",
+    )
     # Summarization options (applies to all backends)
     generate_summary: bool = Field(
         default=False, description="Generate one-sentence summary for each ingested document"
@@ -332,7 +343,14 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
         elif backend == "azure_ai_search":
             if self.azure_search_endpoint is None:
                 raise ValueError("azure_ai_search requires azure_search_endpoint")
+        elif backend == "nemo_retriever":
+            from knowledge_layer.nemo_retriever.adapter import normalize_backend_config
 
+            self.backend_config = normalize_backend_config(self.backend_config)
+        elif backend == "nemo_retriever_local":
+            from knowledge_layer.nemo_retriever._local_client import normalize_backend_config
+
+            self.backend_config = normalize_backend_config(self.backend_config)
         return self
 
 
@@ -433,9 +451,26 @@ def _setup_backend(config: KnowledgeRetrievalConfig, summary_llm_obj=None) -> tu
             **summary_config,
         }
 
+    elif backend == "nemo_retriever":
+        import knowledge_layer.nemo_retriever.adapter  # noqa: F401
+
+        backend_config = {
+            **config.backend_config,
+            **summary_config,
+        }
+
+    elif backend == "nemo_retriever_local":
+        import knowledge_layer.nemo_retriever.local_adapter  # noqa: F401
+
+        backend_config = {
+            **config.backend_config,
+            **summary_config,
+        }
+
     else:
         raise ValueError(
-            f"Unknown backend: {backend}. Use 'llamaindex', 'foundational_rag', 'opensearch', or 'azure_ai_search'."
+            f"Unknown backend: {backend}. Use 'llamaindex', 'foundational_rag', 'opensearch', "
+            "'azure_ai_search', 'nemo_retriever', or 'nemo_retriever_local'."
         )
 
     os.environ["KNOWLEDGE_RETRIEVER_BACKEND"] = backend
@@ -508,7 +543,10 @@ def _format_results(retrieval_result, query: str) -> str:
             lines.append(f"Page: {chunk.page_number}")
         lines.append(f"Citation: {citation}")
         lines.append(f"Content Type: {chunk.content_type.value}")
-        lines.append(f"Relevance Score: {chunk.score:.2f}")
+        if chunk.distance is not None:
+            lines.append(f"Vector Distance: {chunk.distance:.4g} (lower is closer)")
+        else:
+            lines.append(f"Relevance Score: {chunk.score:.2f}")
         lines.append("")
 
         # Content (truncate if very long)
@@ -549,8 +587,17 @@ async def knowledge_retrieval(config: KnowledgeRetrievalConfig, _builder: Builde
     configure_summary_db(config.summary_db)
 
     retriever = _get_retriever(config)
-
-    _initialize_ingestor(config, summary_llm_obj)
+    try:
+        ingestor = _initialize_ingestor(config, summary_llm_obj)
+    except Exception:
+        # The local retriever acquires a reference to the locked embedded
+        # runtime. If ingestor construction fails, NAT never reaches the yield
+        # finalizer, so release that reference here before propagating startup.
+        if config.backend == "nemo_retriever_local":
+            close = getattr(retriever, "close", None)
+            if callable(close):
+                close()
+        raise
 
     collection = config.collection_name
     top_k = config.top_k
@@ -597,12 +644,34 @@ async def knowledge_retrieval(config: KnowledgeRetrievalConfig, _builder: Builde
             logger.error(f"Knowledge search failed: {e}")
             return f"Error searching knowledge base: {str(e)}"
 
-    # Yield the function info for NAT registration
-    yield FunctionInfo.from_fn(
-        search,
-        description=(
-            "Search the knowledge base for relevant documents. "
-            "Use this to find information from ingested PDFs, documents, and other files. "
-            f"Returns up to {top_k} relevant excerpts with citations."
-        ),
-    )
+    try:
+        # Yield the function info for NAT registration.
+        yield FunctionInfo.from_fn(
+            search,
+            description=(
+                "Search the knowledge base for relevant documents. "
+                "Use this to find information from ingested PDFs, documents, and other files. "
+                f"Returns up to {top_k} relevant excerpts with citations."
+            ),
+        )
+    finally:
+        if config.backend in {"nemo_retriever", "nemo_retriever_local"}:
+            from aiq_agent.knowledge.factory import clear_active_ingestor
+            from aiq_agent.knowledge.factory import get_active_ingestor
+            from aiq_agent.knowledge.factory import release_ingestor
+
+            if get_active_ingestor() is ingestor:
+                clear_active_ingestor()
+            release_ingestor(config.backend, ingestor)
+            for component in (retriever, ingestor):
+                close = getattr(component, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to close NeMo Retriever component (backend=%s, component=%s, error_type=%s)",
+                            config.backend,
+                            type(component).__name__,
+                            type(exc).__name__,
+                        )

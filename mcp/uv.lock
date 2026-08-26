@@ -2204,7 +2204,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pypdf", marker = "extra == 'azure-ai-search'", specifier = ">=4.0.0" },
     { name = "pypdf", marker = "extra == 'opensearch'", specifier = ">=4.0.0" },
-    { name = "pypdfium2", marker = "extra == 'llamaindex'", specifier = ">=5.0.0" },
+    { name = "pypdfium2", marker = "extra == 'llamaindex'", specifier = ">=4.30.0,!=4.30.1,<6" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-pptx", marker = "extra == 'foundational-rag'", specifier = ">=0.6.21" },
     { name = "python-pptx", marker = "extra == 'opensearch'", specifier = ">=0.6.21" },
