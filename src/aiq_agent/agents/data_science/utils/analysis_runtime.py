@@ -29,7 +29,7 @@ class AnalysisRunState:
     temporary_directory: tempfile.TemporaryDirectory[str]
     root: Path
     manifest_path: Path
-    gsf_results: list[dict[str, Any]] = field(default_factory=list)
+    structured_results: list[dict[str, Any]] = field(default_factory=list)
     resources: dict[str, Any] = field(default_factory=dict)
     model_calls: int = 0
     force_finalization: bool = False
@@ -43,17 +43,17 @@ _CURRENT_ANALYSIS_RUN: ContextVar[AnalysisRunState | None] = ContextVar(
 
 
 def _write_manifest(state: AnalysisRunState) -> bool:
-    payload = {"version": 1, "results": state.gsf_results}
+    payload = {"version": 1, "results": state.structured_results}
     staging = state.manifest_path.with_suffix(".tmp")
     try:
         staging.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         staging.replace(state.manifest_path)
     except OSError:
-        logger.exception("Failed to persist the request-local GSF manifest")
+        logger.exception("Failed to persist the request-local structured-data manifest")
         try:
             staging.unlink(missing_ok=True)
         except OSError:
-            logger.exception("Failed to remove an incomplete request-local GSF manifest")
+            logger.exception("Failed to remove an incomplete request-local structured-data manifest")
         return False
     return True
 
@@ -63,7 +63,7 @@ def begin_analysis_run() -> Token[AnalysisRunState | None]:
 
     temporary_directory = tempfile.TemporaryDirectory(prefix="aiq-ds-analysis-", ignore_cleanup_errors=True)
     root = Path(temporary_directory.name)
-    manifest_path = root / "gsf-results.json"
+    manifest_path = root / "structured-results.json"
     state = AnalysisRunState(
         run_id=str(uuid4()),
         temporary_directory=temporary_directory,
@@ -80,24 +80,31 @@ def get_analysis_run() -> AnalysisRunState | None:
     return _CURRENT_ANALYSIS_RUN.get()
 
 
-def register_gsf_result(*, question: str, database_name: str | None, payload: dict[str, Any]) -> str | None:
-    """Persist one successful GSF SQL response and return its stable request-local reference."""
+def register_structured_result(
+    *,
+    provider: str,
+    tool_name: str,
+    question: str,
+    database_name: str | None,
+    payload: dict[str, Any],
+) -> str | None:
+    """Persist one successful structured SQL response and return its stable reference."""
 
     state = get_analysis_run()
     if state is None or payload.get("status") == "error" or not isinstance(payload.get("rows"), list):
         return None
 
-    reference = f"gsf_{len(state.gsf_results) + 1}"
+    reference = f"structured_{len(state.structured_results) + 1}"
     result_path = state.root / f"{reference}.json"
     try:
         serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
         result_path.write_text(serialized, encoding="utf-8")
     except (OSError, TypeError, ValueError):
-        logger.exception("Failed to persist a request-local GSF result")
+        logger.exception("Failed to persist a request-local structured-data result")
         try:
             result_path.unlink(missing_ok=True)
         except OSError:
-            logger.exception("Failed to remove an incomplete request-local GSF result")
+            logger.exception("Failed to remove an incomplete request-local structured-data result")
         return None
     columns = payload.get("columns")
     column_names = [
@@ -109,6 +116,8 @@ def register_gsf_result(*, question: str, database_name: str | None, payload: di
         column_names = [str(name) for name in payload["rows"][0]]
     result = {
         "ref": reference,
+        "provider": provider,
+        "tool_name": tool_name,
         "question": question,
         "database_name": database_name,
         "request_id": payload.get("request_id"),
@@ -117,13 +126,13 @@ def register_gsf_result(*, question: str, database_name: str | None, payload: di
         "truncated": bool(payload.get("truncated", False)),
         "path": str(result_path),
     }
-    state.gsf_results.append(result)
+    state.structured_results.append(result)
     if not _write_manifest(state):
-        state.gsf_results.remove(result)
+        state.structured_results.remove(result)
         try:
             result_path.unlink(missing_ok=True)
         except OSError:
-            logger.exception("Failed to remove an unregistered request-local GSF result")
+            logger.exception("Failed to remove an unregistered request-local structured-data result")
         return None
     return reference
 
@@ -166,5 +175,5 @@ __all__ = [
     "begin_analysis_run",
     "end_analysis_run",
     "get_analysis_run",
-    "register_gsf_result",
+    "register_structured_result",
 ]

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for stateless OpenShell Python execution and the GSF evidence bridge."""
+"""Tests for stateless OpenShell Python execution and structured-data evidence."""
 
 import ast
 import json
@@ -50,19 +50,21 @@ class _FakeRuntime:
 
 
 def _write_evidence(root: Path) -> Path:
-    result_path = root / "gsf_1.json"
+    result_path = root / "structured_1.json"
     result_path.write_text(
         json.dumps({"sql": "SELECT value", "rows": [{"value": 2}, {"value": 5}]}),
         encoding="utf-8",
     )
-    manifest_path = root / "gsf-results.json"
+    manifest_path = root / "structured-results.json"
     manifest_path.write_text(
         json.dumps(
             {
                 "version": 1,
                 "results": [
                     {
-                        "ref": "gsf_1",
+                        "ref": "structured_1",
+                        "provider": "ontology",
+                        "tool_name": "ontology__text_to_sql",
                         "question": "Values",
                         "database_name": "example",
                         "request_id": "r1",
@@ -90,10 +92,10 @@ def test_runner_uses_a_fresh_namespace_for_every_script(tmp_path: Path) -> None:
     assert second["error"] == "NameError"
 
 
-def test_runner_exposes_exact_gsf_helpers(tmp_path: Path) -> None:
+def test_runner_exposes_exact_analysis_helpers(tmp_path: Path) -> None:
     manifest_path = _write_evidence(tmp_path)
     response = runner.execute(
-        "df = gsf_rows('gsf_1')\n(int(df['value'].sum()), gsf_sql('gsf_1'))",
+        "df = analysis_rows('structured_1')\n(int(df['value'].sum()), analysis_sql('structured_1'))",
         manifest_path,
         50_000,
     )
@@ -178,7 +180,7 @@ async def test_runner_uploads_only_trusted_runtime_request_and_evidence(tmp_path
         host_evidence_root=tmp_path,
     )
     try:
-        result = json.loads(await python_runner.execute("gsf_rows('gsf_1')['value'].sum()"))
+        result = json.loads(await python_runner.execute("analysis_rows('structured_1')['value'].sum()"))
     finally:
         await python_runner.aclose()
 
@@ -186,14 +188,15 @@ async def test_runner_uploads_only_trusted_runtime_request_and_evidence(tmp_path
     assert result["result"] == "7"
     uploaded = backend.uploads[0]
     assert set(uploaded) == {
-        "/sandbox/data-science-job/evidence/gsf-results.json",
-        "/sandbox/data-science-job/evidence/gsf_1.json",
+        "/sandbox/data-science-job/evidence/structured-results.json",
+        "/sandbox/data-science-job/evidence/structured_1.json",
         "/sandbox/data-science-job/requests/script-1.json",
         "/sandbox/data-science-job/runner.py",
     }
-    remote_manifest = json.loads(uploaded["/sandbox/data-science-job/evidence/gsf-results.json"])
-    assert remote_manifest["results"][0]["path"] == "/sandbox/data-science-job/evidence/gsf_1.json"
-    assert str(tmp_path) not in uploaded["/sandbox/data-science-job/evidence/gsf-results.json"].decode()
+    remote_manifest = json.loads(uploaded["/sandbox/data-science-job/evidence/structured-results.json"])
+    assert remote_manifest["results"][0]["path"] == "/sandbox/data-science-job/evidence/structured_1.json"
+    assert remote_manifest["results"][0]["provider"] == "ontology"
+    assert str(tmp_path) not in uploaded["/sandbox/data-science-job/evidence/structured-results.json"].decode()
     assert "/usr/bin/prlimit" in backend.commands[0][0]
     assert "/bin/cat /sandbox/data-science-job/requests/script-1.response.json" in backend.commands[0][0]
     assert runtime.closed is True
@@ -216,15 +219,15 @@ async def test_runner_reuploads_authoritative_evidence_before_every_script(tmp_p
         host_evidence_root=tmp_path,
     )
     try:
-        await python_runner.execute("gsf_rows('gsf_1')")
-        await python_runner.execute("gsf_rows('gsf_1')")
+        await python_runner.execute("analysis_rows('structured_1')")
+        await python_runner.execute("analysis_rows('structured_1')")
     finally:
         await python_runner.aclose()
 
     assert len(backend.uploads) == 2
     for upload in backend.uploads:
-        assert "/sandbox/data-science-job/evidence/gsf_1.json" in upload
-        assert "/sandbox/data-science-job/evidence/gsf-results.json" in upload
+        assert "/sandbox/data-science-job/evidence/structured_1.json" in upload
+        assert "/sandbox/data-science-job/evidence/structured-results.json" in upload
 
 
 @pytest.mark.asyncio
@@ -251,9 +254,9 @@ async def test_runner_rejects_evidence_outside_request_root(tmp_path: Path) -> N
     root.mkdir()
     outside = tmp_path / "outside.json"
     outside.write_text('{"rows":[]}', encoding="utf-8")
-    manifest = root / "gsf-results.json"
+    manifest = root / "structured-results.json"
     manifest.write_text(
-        json.dumps({"version": 1, "results": [{"ref": "gsf_1", "path": str(outside)}]}),
+        json.dumps({"version": 1, "results": [{"ref": "structured_1", "path": str(outside)}]}),
         encoding="utf-8",
     )
     runtime = _FakeRuntime(_FakeBackend())

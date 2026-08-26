@@ -60,7 +60,7 @@ values observed earlier. Document and web searches should be narrow enough to
 represent distinct evidence needs. The final answer goes through AI-Q's source
 registry, citation verification, and report sanitization.
 
-The optional request-local GSF guard enforces configured catalog and
+The optional request-local structured-data guard enforces configured catalog and
 text-to-SQL call limits, serializes calls, caches exact repeats, and records
 compact evidence diagnostics (coverage/candidate counts or row counts and
 truncation). The agent prompt complements that boundary with an evidence ledger,
@@ -72,15 +72,16 @@ the `sandboxed_python` NAT function launches a fresh, bounded Python process for
 each tool call inside one attested OpenShell sandbox owned by the DS request.
 Variables do not persist, so every call must be a self-contained script. The
 model sees a single `python(code)` tool and does not manage sandbox or workspace
-identifiers. Every successful GSF text-to-SQL response is persisted under a
-stable request-local reference (`gsf_1`, `gsf_2`, and so on). Before every
+identifiers. Every successful structured-data SQL response is persisted under a
+stable request-local reference (`structured_1`, `structured_2`, and so on). Before every
 script, AI-Q copies the complete authoritative receipt set into the sandbox
 through a bounded manifest whose paths are rewritten to sandbox-local files.
 The trusted runner exposes
-`list_gsf_results()`, `gsf_result(ref)`, `gsf_rows(ref)`, `gsf_sql(ref)`, and
-`gsf_latest()`, so analysis consumes exact rows rather than copying values from
-the conversation. The runner has no configured source-database or GSF client;
-all retrieval remains an agent-level GSF operation. Network access is blocked,
+`list_analysis_results()`, `analysis_result(ref)`, `analysis_rows(ref)`,
+`analysis_sql(ref)`, and `analysis_latest()`, so analysis consumes exact rows
+rather than copying values from the conversation. The runner has no configured
+source-database or ontology-provider client; all retrieval remains an agent-level
+operation. Network access is blocked,
 application credentials are never included in the sandbox specification, and
 normal completion, failure, timeout, or cancellation deletes the request-owned
 sandbox. Hard per-script limits bound address space, CPU, process count, open
@@ -253,8 +254,8 @@ researcher or top-level router:
 - `configs/config_cli_data_science_fdabench_lite.yml` runs DS ReAct with GSF,
   Foundational RAG, and Tavily.
 - `configs/config_cli_data_science_fdabench_lite_python.yml` keeps the same
-  model, source tools, GSF limits, and response contract, and adds only the
-  stateless OpenShell scientific Python runner with exact GSF-result helpers.
+  model, source tools, structured-data limits, and response contract, and adds
+  only the stateless OpenShell scientific Python runner with exact result helpers.
 
 Both profiles are headless and set `response_mode: fdabench_choice`. When a task
 contains labeled choices, the prompt evaluates every option and emits an
@@ -267,7 +268,7 @@ Required benchmark variables are `AIQ_DATA_SCIENCE_MODEL`,
 `INFERENCE_NVIDIA_API_KEY`, `AIQ_INFERENCE_BASE_URL`, `GSF_BASE_URL`,
 `GSF_EMAIL`, `GSF_PASSWORD`, `RAG_SERVER_URL`, `COLLECTION_NAME`, and
 `TAVILY_API_KEY`. Optional
-`AIQ_DS_GSF_CATALOG_CALL_LIMIT` and `AIQ_DS_GSF_TEXT_TO_SQL_CALL_LIMIT`
+`AIQ_DS_STRUCTURED_CATALOG_CALL_LIMIT` and `AIQ_DS_STRUCTURED_TEXT_TO_SQL_CALL_LIMIT`
 override the profile defaults of two and six actual calls, respectively. Exact
 request-local cache hits do not consume those budgets.
 `AIQ_DS_PYTHON_CALL_LIMIT`, `AIQ_DS_PYTHON_TIMEOUT_SECONDS`,

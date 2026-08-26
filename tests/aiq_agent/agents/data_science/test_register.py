@@ -18,6 +18,7 @@ from aiq_agent.agents.chat_researcher.models import CatalogRoutingResponse
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.data_science import register as data_science_register
 from aiq_agent.agents.data_science.models import DataScienceAgentState
+from aiq_agent.agents.data_science.utils.structured_data_guardrails import StructuredDataCallGuardMiddleware
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
@@ -43,9 +44,10 @@ def test_config_inherits_registry_tools_and_rejects_unknown_fields():
     assert config.recursion_limit == 64
     assert config.interaction_mode == "interactive"
     assert config.response_mode == "standard"
-    assert config.gsf_catalog_call_limit is None
-    assert config.gsf_text_to_sql_call_limit is None
-    assert config.gsf_cache_repeated_calls is True
+    assert config.ontology_provider is None
+    assert config.structured_catalog_call_limit is None
+    assert config.structured_text_to_sql_call_limit is None
+    assert config.structured_cache_repeated_calls is True
     assert config.python_call_limit is None
     assert config.finalization_model_call_limit is None
     with pytest.raises(ValueError, match="models"):
@@ -56,6 +58,31 @@ def test_config_inherits_registry_tools_and_rejects_unknown_fields():
         data_science_register.DataScienceAgentConfig(llm="model", response_mode="brief")
 
 
+def test_config_validates_provider_neutral_tool_roles() -> None:
+    config = data_science_register.DataScienceAgentConfig(
+        llm="model",
+        ontology_provider={
+            "provider": "gsf",
+            "catalog_tools": ["gsf__catalog_search"],
+            "execution_tools": ["gsf__text_to_sql", "gsf__text_to_pql"],
+        },
+    )
+
+    assert config.ontology_provider is not None
+    assert config.ontology_provider.catalog_tool_names == frozenset({"gsf__catalog_search"})
+    assert config.ontology_provider.execution_tool_names == frozenset({"gsf__text_to_sql", "gsf__text_to_pql"})
+
+    with pytest.raises(ValueError, match="tool roles overlap"):
+        data_science_register.DataScienceAgentConfig(
+            llm="model",
+            ontology_provider={
+                "provider": "gsf",
+                "catalog_tools": ["gsf__catalog_search"],
+                "execution_tools": ["gsf__catalog_search"],
+            },
+        )
+
+
 @pytest.mark.asyncio
 async def test_registration_inherits_registry_refs_and_runs_selected_tools():
     reset_registry()
@@ -64,7 +91,9 @@ async def test_registration_inherits_registry_refs_and_runs_selected_tools():
         group_names={"gsf"},
     )
     builder = MagicMock()
-    builder.get_tools = AsyncMock(return_value=[_dummy_search])
+    catalog_tool = _dummy_search.model_copy(update={"name": "gsf__catalog_search"})
+    execution_tool = _dummy_search.model_copy(update={"name": "gsf__text_to_sql"})
+    builder.get_tools = AsyncMock(return_value=[catalog_tool, execution_tool])
     builder.get_llm = AsyncMock(return_value=MagicMock())
     config = data_science_register.DataScienceAgentConfig(llm="model")
 
@@ -96,14 +125,21 @@ async def test_registration_passes_headless_mode_to_agent():
         group_names={"gsf"},
     )
     builder = MagicMock()
-    builder.get_tools = AsyncMock(return_value=[_dummy_search])
+    catalog_tool = _dummy_search.model_copy(update={"name": "gsf__catalog_search"})
+    execution_tool = _dummy_search.model_copy(update={"name": "gsf__text_to_sql"})
+    builder.get_tools = AsyncMock(return_value=[catalog_tool, execution_tool])
     builder.get_llm = AsyncMock(return_value=MagicMock())
     config = data_science_register.DataScienceAgentConfig(
         llm="model",
         interaction_mode="headless",
         response_mode="fdabench_choice",
-        gsf_catalog_call_limit=2,
-        gsf_text_to_sql_call_limit=6,
+        ontology_provider={
+            "provider": "gsf",
+            "catalog_tools": ["gsf__catalog_search"],
+            "execution_tools": ["gsf__text_to_sql"],
+        },
+        structured_catalog_call_limit=2,
+        structured_text_to_sql_call_limit=6,
         python_call_limit=7,
         finalization_model_call_limit=28,
         verbose=True,
@@ -121,8 +157,13 @@ async def test_registration_passes_headless_mode_to_agent():
         assert result is sentinel
         assert agent_cls.call_args.kwargs["interaction_mode"] == "headless"
         assert agent_cls.call_args.kwargs["response_mode"] == "fdabench_choice"
-        assert agent_cls.call_args.kwargs["gsf_catalog_call_limit"] == 2
-        assert agent_cls.call_args.kwargs["gsf_text_to_sql_call_limit"] == 6
+        guard = agent_cls.call_args.kwargs["structured_guard"]
+        assert isinstance(guard, StructuredDataCallGuardMiddleware)
+        assert guard.provider == "gsf"
+        assert guard.catalog_tools == frozenset({"gsf__catalog_search"})
+        assert guard.text_to_sql_tools == frozenset({"gsf__text_to_sql"})
+        assert guard.budget.catalog_calls == 2
+        assert guard.budget.text_to_sql_calls == 6
         assert agent_cls.call_args.kwargs["python_call_limit"] == 7
         assert agent_cls.call_args.kwargs["finalization_model_call_limit"] == 28
         callbacks = agent_cls.call_args.kwargs["callbacks"]

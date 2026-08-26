@@ -43,16 +43,12 @@ from .utils.analysis_runtime import begin_analysis_run
 from .utils.analysis_runtime import end_analysis_run
 from .utils.analysis_runtime import get_analysis_run
 from .utils.finalization import FinalizationReserveMiddleware
-from .utils.gsf_guardrails import GSFCallBudget
-from .utils.gsf_guardrails import GSFCallGuardMiddleware
-from .utils.gsf_guardrails import begin_gsf_run
-from .utils.gsf_guardrails import end_gsf_run
-from .utils.gsf_guardrails import summarize_gsf_run
 from .utils.prompt import build_prompt_middleware
 from .utils.reporting import capture_data_sources
 from .utils.reporting import citation_repair_instruction
 from .utils.reporting import finalize_data_science_messages
 from .utils.reporting import has_citation_integrity
+from .utils.structured_data_guardrails import StructuredDataCallGuardMiddleware
 
 AGENT_DIR = Path(__file__).parent
 logger = logging.getLogger(__name__)
@@ -200,9 +196,7 @@ class DataScienceAgent:
         middleware: Sequence[AgentMiddleware] = (),
         interaction_mode: InteractionMode = "interactive",
         response_mode: ResponseMode = "standard",
-        gsf_catalog_call_limit: int | None = None,
-        gsf_text_to_sql_call_limit: int | None = None,
-        gsf_cache_repeated_calls: bool = True,
+        structured_guard: StructuredDataCallGuardMiddleware | None = None,
         python_call_limit: int | None = None,
         finalization_model_call_limit: int | None = None,
     ) -> None:
@@ -220,25 +214,19 @@ class DataScienceAgent:
         if response_mode not in {"standard", "fdabench_choice"}:
             raise ValueError(f"unsupported data-science response mode: {response_mode}")
 
-        gsf_budget = GSFCallBudget(
-            catalog_calls=gsf_catalog_call_limit,
-            text_to_sql_calls=gsf_text_to_sql_call_limit,
-            cache_repeated_calls=gsf_cache_repeated_calls,
-        )
-
         agent_tools = list(tools)
         prompt_middleware = build_prompt_middleware(
             load_prompt(AGENT_DIR / "prompts", "agent"),
             agent_tools,
             interaction_mode=interaction_mode,
             response_mode=response_mode,
-            gsf_catalog_call_limit=gsf_catalog_call_limit,
-            gsf_text_to_sql_call_limit=gsf_text_to_sql_call_limit,
+            structured_catalog_call_limit=structured_guard.budget.catalog_calls if structured_guard else None,
+            structured_text_to_sql_call_limit=structured_guard.budget.text_to_sql_calls if structured_guard else None,
             python_call_limit=python_call_limit,
         )
         agent_middleware = [prompt_middleware]
-        if gsf_catalog_call_limit is not None or gsf_text_to_sql_call_limit is not None or gsf_cache_repeated_calls:
-            agent_middleware.append(GSFCallGuardMiddleware(gsf_budget))
+        if structured_guard is not None:
+            agent_middleware.append(structured_guard)
         if python_call_limit is not None and "python" in tool_name_counts:
             agent_middleware.append(
                 ToolCallLimitMiddleware(
@@ -263,7 +251,7 @@ class DataScienceAgent:
         self.callbacks = tuple(callbacks)
         self.interaction_mode = interaction_mode
         self.response_mode = response_mode
-        self.gsf_budget = gsf_budget
+        self.structured_guard = structured_guard
         self.python_call_limit = python_call_limit
         self.finalization_model_call_limit = effective_finalization_limit
 
@@ -283,7 +271,7 @@ class DataScienceAgent:
         self._validate_question(state)
         registry_token = None
         analysis_run_token = begin_analysis_run()
-        gsf_run_token = begin_gsf_run(self.gsf_budget)
+        structured_run_token = self.structured_guard.begin_run() if self.structured_guard is not None else None
         registry = get_session_registry()
         if registry is None:
             registry = SourceRegistry()
@@ -462,10 +450,11 @@ class DataScienceAgent:
                 )
         finally:
             try:
-                summary = summarize_gsf_run()
-                if summary and (summary["catalog_calls"] or summary["text_to_sql_calls"] or summary["cache_hits"]):
-                    logger.info("Data-science GSF call summary: %s", summary)
-                end_gsf_run(gsf_run_token)
+                if structured_run_token is not None and self.structured_guard is not None:
+                    summary = self.structured_guard.summarize_run()
+                    if summary and (summary["catalog_calls"] or summary["text_to_sql_calls"] or summary["cache_hits"]):
+                        logger.info("Data-science structured-data call summary: %s", summary)
+                    self.structured_guard.end_run(structured_run_token)
                 await end_analysis_run(analysis_run_token)
             finally:
                 if registry_token is not None:

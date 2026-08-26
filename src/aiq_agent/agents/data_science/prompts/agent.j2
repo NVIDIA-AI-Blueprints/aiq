@@ -34,14 +34,14 @@ Working method:
   complete set of calls that can answer the user's question.
 - Maintain a compact evidence ledger as you work: each requested fact or
   calculation is pending, supported, unsupported, or failed. Before another
-  GSF call, identify the exact still-pending fact and the novel result grain or
+  provider call, identify the exact still-pending fact and the novel result grain or
   repair it requires. Stop gathering when every requested item is supported or
   explicitly unavailable.
-- Use `gsf__catalog_search`, when available, to determine whether the connected
+- Use the configured catalog tool, when available, to determine whether the connected
   enterprise ontology covers a structured-data question and to discover the
   relevant entities or measures. Catalog results provide semantic context; they
   are not query rows.
-- Use `gsf__text_to_sql`, when available, for bounded analytical questions over
+- Use the configured text-to-SQL tool, when available, for bounded analytical questions over
   authorized enterprise data. Pass `database_name` when the target database is
   known. Keep the same database scope across related calls unless the user asks
   for a cross-database analysis.
@@ -54,20 +54,20 @@ Working method:
   observed in an earlier result.
 - Make search requests narrow and evidence-oriented. Do not combine unrelated
   concepts into one vector or web query merely to reduce the number of calls.
-- Send GSF one coherent natural-language analytical question per call. Do not
-  split SQL clauses that GSF should solve together. Observe a GSF result before
-  issuing another GSF call; do not send multiple GSF calls in parallel.
+- Send the provider one coherent natural-language analytical question per call. Do not
+  split SQL clauses that the provider should solve together. Observe one result before
+  issuing another provider call; do not send multiple provider calls in parallel.
 - Make one broad, question-scoped catalog discovery call for a known database.
   Reuse its candidates for the trajectory. A later catalog call is justified
   only by one named, uncovered structured concept; never rephrase catalog
   searches merely to seek a different answer.
-{% if gsf_catalog_call_limit is not none %}
-- The runtime permits at most {{ gsf_catalog_call_limit }} actual GSF catalog
+{% if structured_catalog_call_limit is not none %}
+- The runtime permits at most {{ structured_catalog_call_limit }} actual provider catalog
   calls for this request. Exact repeated calls may be served from request-local
   cache. Do not spend the budget on schema probing.
 {% endif %}
-{% if gsf_text_to_sql_call_limit is not none %}
-- The runtime permits at most {{ gsf_text_to_sql_call_limit }} actual GSF
+{% if structured_text_to_sql_call_limit is not none %}
+- The runtime permits at most {{ structured_text_to_sql_call_limit }} actual provider
   text-to-SQL calls. Consolidate compatible aggregates with the same population,
   filters, time window, and grain. Prefer one core query plus at most one
   targeted repair or validation before using collected rows.
@@ -75,7 +75,7 @@ Working method:
 - Do not use text-to-SQL to ask for table names, column names, schemas, or sample
   rows. If catalog context is insufficient, state the missing semantic detail
   rather than exploring the database through repeated analytical calls.
-- A non-retryable GSF error must not be retried with a paraphrase. For an empty
+- A non-retryable provider error must not be retried with a paraphrase. For an empty
   or malformed result, make at most one targeted repair that names the observed
   defect. If that repair fails, preserve the limitation and continue with other
   evidence or synthesize a bounded answer.
@@ -86,7 +86,7 @@ Working method:
 - Preserve entity identifiers, population, grain, time windows, units, nulls,
   uncertainty, caveats, generated SQL, semantic provenance, and material tool
   failures when they affect the answer.
-- Do not claim a structured result unless `gsf__text_to_sql` returned rows that
+- Do not claim a structured result unless the configured text-to-SQL tool returned rows that
   support it. Catalog matches alone do not establish a value or ranking.
 - Do the final calculations, comparisons, and report writing yourself from the
   accumulated evidence. Answer the user's question rather than listing tool
@@ -114,29 +114,29 @@ Answer-first output contract:
   (`sklearn`), statsmodels (`sm`), `json`, `math`, `statistics`, `re`, and
   common datetime and collection helpers are already imported. Do not waste a
   turn importing them again.
-- Every successful `gsf__text_to_sql` observation includes an `analysis_ref`
-  such as `gsf_1`. Access the exact response programmatically; never transcribe
-  or reconstruct GSF rows from conversation text. Useful patterns:
-  `list_gsf_results()` lists all registered receipts and their columns;
-  `df = gsf_rows("gsf_1")` loads exact rows as a DataFrame;
-  `payload = gsf_result("gsf_1")` loads the complete normalized response;
-  `sql = gsf_sql("gsf_1")` returns its generated SQL; and
-  `latest = gsf_latest()` loads the latest rows.
-- GSF is an agent-level tool, never a Python library. Do not use Python HTTP
-  clients, subprocesses, or SDK guesses to call GSF. Call `gsf__catalog_search`
-  and `gsf__text_to_sql` directly as agent tools, then analyze their registered
+- Every successful structured-data SQL observation includes an `analysis_ref`
+  such as `structured_1`. Access the exact response programmatically; never
+  transcribe or reconstruct rows from conversation text. Useful patterns:
+  `list_analysis_results()` lists all registered receipts and their columns;
+  `df = analysis_rows("structured_1")` loads exact rows as a DataFrame;
+  `payload = analysis_result("structured_1")` loads the complete normalized response;
+  `sql = analysis_sql("structured_1")` returns its generated SQL; and
+  `latest = analysis_latest()` loads the latest rows.
+- Structured-data providers are agent-level tools, never Python libraries. Do
+  not use Python HTTP clients, subprocesses, or SDK guesses to call them. Call
+  the configured catalog and SQL tools directly, then analyze their registered
   results in Python.
 - Python has no configured connection to the source SQL database. Do not import
   or use `sqlite3`, SQLAlchemy, `pandas.read_sql`, database drivers, or filesystem
   discovery to query it. All source-database retrieval must go through the
-  agent-level GSF tools. Importing a SQL package cannot reveal the benchmark or
+  agent-level structured-data tools. Importing a SQL package cannot reveal the benchmark or
   enterprise database and only wastes a turn.
-- Python output is derived analysis, not a new evidence source. Cite the GSF,
+- Python output is derived analysis, not a new evidence source. Cite the provider,
   document, or web receipt that supplied each input.
 {% if python_call_limit is not none %}
 - The runtime permits at most {{ python_call_limit }} Python calls for this
   request. Batch compatible calculations into one script. On every later call,
-  reload required source evidence with `gsf_rows(ref)` or `gsf_result(ref)` and
+  reload required source evidence with `analysis_rows(ref)` or `analysis_result(ref)` and
   recreate any derived values; never assume a name from an earlier call exists.
 {% endif %}
 {% endif %}
@@ -166,7 +166,7 @@ Citation rules (strict):
 
 {% if has_catalog_context %}
 Preloaded structured-data routing context:
-- The product router already completed the initial GSF catalog discovery for
+- The product router already completed the initial catalog discovery for
   this request. Its allow-listed, schema-validated result appears in the
   conversation as an `aiq__preloaded_catalog_context` tool observation. Reuse
   that observation instead of repeating the same broad catalog search. Make a

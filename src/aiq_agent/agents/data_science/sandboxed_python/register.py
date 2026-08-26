@@ -72,13 +72,14 @@ async def sandboxed_python(tool_config: SandboxedPythonConfig, builder: Builder)
 
         Variables do not persist across calls. NumPy (`np`), pandas (`pd`), SciPy
         (`scipy`, `stats`), scikit-learn (`sklearn`), and statsmodels (`sm`) are
-        preloaded every time. Successful agent-level GSF results remain available
-        through `list_gsf_results()`, `gsf_result(ref)`, `gsf_rows(ref)`,
-        `gsf_sql(ref)`, and `gsf_latest()` in every invocation.
+        preloaded every time. Successful agent-level structured-data results remain
+        available through `list_analysis_results()`, `analysis_result(ref)`,
+        `analysis_rows(ref)`, `analysis_sql(ref)`, and `analysis_latest()` in every
+        invocation.
 
-        This is an analysis tool, not a data-access tool. It has no configured GSF
-        client, source SQL connection, or benchmark database. Call GSF with the
-        agent-level tools first, then analyze its registered rows here.
+        This is an analysis tool, not a data-access tool. It has no configured
+        provider client, source SQL connection, or benchmark database. Call the
+        agent-level structured-data tools first, then analyze registered rows here.
         """
 
         run_state = get_analysis_run()

@@ -14,6 +14,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
+from aiq_agent.common import OntologyProviderConfig
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
@@ -35,6 +36,8 @@ from nat.data_models.function import FunctionBaseConfig
 from .agent import DataScienceAgent
 from .models import DataScienceAgentState
 from .sandboxed_python import SandboxedPythonConfig
+from .utils.structured_data_guardrails import StructuredDataCallBudget
+from .utils.structured_data_guardrails import StructuredDataCallGuardMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -76,19 +79,26 @@ class DataScienceAgentConfig(FunctionBaseConfig, name="data_science_agent"):
         default="standard",
         description="Optional response contract; FDABench choice mode preserves labels when choices are present.",
     )
-    gsf_catalog_call_limit: int | None = Field(
+    ontology_provider: OntologyProviderConfig | None = Field(
+        default=None,
+        description=(
+            "Provider-neutral assignment of catalog and execution roles. "
+            "Referenced tools must also be loaded through tools or data_source_registry."
+        ),
+    )
+    structured_catalog_call_limit: int | None = Field(
         default=None,
         ge=1,
-        description="Optional request-local hard limit for actual GSF catalog calls.",
+        description="Optional request-local hard limit for ontology-provider catalog calls.",
     )
-    gsf_text_to_sql_call_limit: int | None = Field(
+    structured_text_to_sql_call_limit: int | None = Field(
         default=None,
         ge=1,
-        description="Optional request-local hard limit for actual GSF text-to-SQL calls.",
+        description="Optional request-local hard limit for ontology-provider text-to-SQL calls.",
     )
-    gsf_cache_repeated_calls: bool = Field(
+    structured_cache_repeated_calls: bool = Field(
         default=True,
-        description="Reuse exact repeated GSF calls within one request.",
+        description="Reuse exact repeated catalog and text-to-SQL calls within one request.",
     )
     python_call_limit: int | None = Field(
         default=None,
@@ -115,6 +125,25 @@ class DataScienceHybridAdapterConfig(FunctionBaseConfig, name="data_science_hybr
     model_config = ConfigDict(extra="forbid")
 
     agent: FunctionRef = Field(description="Configured data_science_agent function to invoke.")
+
+
+def _active_ontology_provider(
+    provider: OntologyProviderConfig | None,
+    tools: list[Any],
+) -> OntologyProviderConfig | None:
+    """Resolve configured provider roles against one request's filtered tools."""
+
+    available = {tool.name for tool in tools}
+    if provider is None:
+        return None
+
+    assigned = provider.tool_names & available
+    if not assigned:
+        return None
+    missing = sorted(provider.tool_names - available)
+    if missing:
+        raise ValueError(f"ontology provider references unavailable tools: {', '.join(missing)}")
+    return provider
 
 
 @register_function(config_type=DataScienceAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -176,6 +205,24 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
                 )
 
             validate_research_source_configuration(state.data_sources, "data science", selected_tools)
+            active_provider = _active_ontology_provider(config.ontology_provider, selected_tools)
+            structured_guard = None
+            if active_provider is not None:
+                text_to_sql_tools = (
+                    active_provider.execution_tool_names & frozenset({"gsf__text_to_sql"})
+                    if active_provider.provider == "gsf"
+                    else frozenset()
+                )
+                structured_guard = StructuredDataCallGuardMiddleware(
+                    provider=active_provider.provider,
+                    catalog_tools=active_provider.catalog_tool_names,
+                    text_to_sql_tools=text_to_sql_tools,
+                    budget=StructuredDataCallBudget(
+                        catalog_calls=config.structured_catalog_call_limit,
+                        text_to_sql_calls=config.structured_text_to_sql_call_limit,
+                        cache_repeated_calls=config.structured_cache_repeated_calls,
+                    ),
+                )
             active_agent = DataScienceAgent(
                 llm=llm,
                 tools=selected_tools,
@@ -183,9 +230,7 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
                 callbacks=callbacks,
                 interaction_mode=config.interaction_mode,
                 response_mode=config.response_mode,
-                gsf_catalog_call_limit=config.gsf_catalog_call_limit,
-                gsf_text_to_sql_call_limit=config.gsf_text_to_sql_call_limit,
-                gsf_cache_repeated_calls=config.gsf_cache_repeated_calls,
+                structured_guard=structured_guard,
                 python_call_limit=config.python_call_limit,
                 finalization_model_call_limit=config.finalization_model_call_limit,
             )
