@@ -274,6 +274,19 @@ def clear_active_ingestor() -> None:
     _ACTIVE_INGESTOR = None
 
 
+def release_ingestor(backend: str, ingestor: BaseIngestor) -> bool:
+    """Remove one expected cached ingestor during a backend lifecycle finalizer.
+
+    The identity check prevents an older finalizer from evicting a replacement
+    instance created for the same backend.
+    """
+    if _INGESTOR_INSTANCES.get(backend) is not ingestor:
+        return False
+    del _INGESTOR_INSTANCES[backend]
+    logger.info("Released singleton ingestor instance for backend: %s", backend)
+    return True
+
+
 # =============================================================================
 # Summary Registry (SQLAlchemy-backed, Backend-Agnostic)
 # =============================================================================
@@ -308,11 +321,11 @@ def _get_summary_store() -> "SummaryStore":
     return _summary_store
 
 
-def register_summary(collection: str, filename: str, summary: str | None) -> None:
-    """Store summary in database."""
+def register_summary(collection: str, filename: str, summary: str | None, upsert: bool = True) -> None:
+    """Store a summary, optionally preserving an existing filename's summary."""
     if not summary:
         return
-    _get_summary_store().register(collection, filename, summary)
+    _get_summary_store().register(collection, filename, summary, upsert=upsert)
 
 
 def get_available_documents(collection: str) -> list["AvailableDocument"]:
@@ -323,6 +336,11 @@ def get_available_documents(collection: str) -> list["AvailableDocument"]:
 async def get_available_documents_async(collection: str) -> list["AvailableDocument"]:
     """Get documents with summaries (async)."""
     return await _get_summary_store().get_all_async(collection)
+
+
+def list_summary_collections() -> list[str]:
+    """Get every collection that currently holds summaries."""
+    return _get_summary_store().list_collections()
 
 
 def unregister_summary(collection: str, filename: str) -> None:
