@@ -89,7 +89,7 @@ functions:
     ontology_provider:
       provider: gsf
       catalog_tools: [gsf__catalog_search]
-      execution_tools: [gsf__text_to_sql]
+      analytical_tools: [gsf__text_to_sql]
     interaction_mode: ${AIQ_DS_INTERACTION_MODE:-interactive}
     recursion_limit: 64
     verbose: true

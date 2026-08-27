@@ -123,7 +123,7 @@ functions:
     ontology_provider:
       provider: gsf
       catalog_tools: [gsf__catalog_search]
-      execution_tools: [gsf__text_to_sql]
+      analytical_tools: [gsf__text_to_sql]
     interaction_mode: headless
     response_mode: fdabench_choice
     structured_catalog_call_limit: ${AIQ_DS_STRUCTURED_CATALOG_CALL_LIMIT:-2}

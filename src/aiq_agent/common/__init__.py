@@ -54,7 +54,6 @@ from .json_utils import extract_json
 from .llm_provider import LLMProvider
 from .llm_provider import LLMRole
 from .message_utils import get_latest_user_query
-from .ontology_provider import OntologyProviderConfig
 from .prompt_utils import load_prompt
 from .prompt_utils import render_prompt_template
 from .tool_validation import format_tool_unavailability_error
@@ -72,7 +71,6 @@ __all__ = [
     "DEFAULT_DATA_SOURCES",
     "LLMProvider",
     "LLMRole",
-    "OntologyProviderConfig",
     "SourceRegistry",
     "VerboseTraceCallback",
     "all_mapped_tools_filtered_out",

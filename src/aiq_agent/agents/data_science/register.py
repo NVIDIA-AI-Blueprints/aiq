@@ -14,7 +14,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
-from aiq_agent.common import OntologyProviderConfig
+from aiq_agent.agents.chat_researcher.utils import _extract_query_context
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
@@ -23,6 +23,7 @@ from aiq_agent.common import get_all_tool_refs
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.ontology import OntologyProviderConfig
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -82,7 +83,7 @@ class DataScienceAgentConfig(FunctionBaseConfig, name="data_science_agent"):
     ontology_provider: OntologyProviderConfig | None = Field(
         default=None,
         description=(
-            "Provider-neutral assignment of catalog and execution roles. "
+            "Provider-neutral assignment of catalog, analytical, and predictive roles. "
             "Referenced tools must also be loaded through tools or data_source_registry."
         ),
     )
@@ -208,15 +209,10 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
             active_provider = _active_ontology_provider(config.ontology_provider, selected_tools)
             structured_guard = None
             if active_provider is not None:
-                text_to_sql_tools = (
-                    active_provider.execution_tool_names & frozenset({"gsf__text_to_sql"})
-                    if active_provider.provider == "gsf"
-                    else frozenset()
-                )
                 structured_guard = StructuredDataCallGuardMiddleware(
                     provider=active_provider.provider,
                     catalog_tools=active_provider.catalog_tool_names,
-                    text_to_sql_tools=text_to_sql_tools,
+                    text_to_sql_tools=active_provider.analytical_tool_names,
                     budget=StructuredDataCallBudget(
                         catalog_calls=config.structured_catalog_call_limit,
                         text_to_sql_calls=config.structured_text_to_sql_call_limit,
@@ -281,9 +277,15 @@ async def data_science_workflow(config: DataScienceWorkflowConfig, builder: Buil
     """Expose the DS Agent as a standard string-to-ChatResponse workflow."""
     agent_fn = await builder.get_function("data_science_agent")
 
-    async def _run(query: str) -> ChatResponse:
+    async def _run(query: object) -> ChatResponse:
+        request_context = _extract_query_context(query)
         try:
-            result = await agent_fn.ainvoke(DataScienceAgentState(messages=[HumanMessage(content=query)]))
+            result = await agent_fn.ainvoke(
+                DataScienceAgentState(
+                    messages=[HumanMessage(content=request_context.query_text)],
+                    data_sources=request_context.data_sources,
+                )
+            )
             content = str(result.messages[-1].content)
         except EmptySourceRegistryError as exc:
             content = exc.public_response

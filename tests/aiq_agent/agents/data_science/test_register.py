@@ -64,13 +64,15 @@ def test_config_validates_provider_neutral_tool_roles() -> None:
         ontology_provider={
             "provider": "gsf",
             "catalog_tools": ["gsf__catalog_search"],
-            "execution_tools": ["gsf__text_to_sql", "gsf__text_to_pql"],
+            "analytical_tools": ["gsf__text_to_sql"],
+            "predictive_tools": ["gsf__text_to_pql"],
         },
     )
 
     assert config.ontology_provider is not None
     assert config.ontology_provider.catalog_tool_names == frozenset({"gsf__catalog_search"})
-    assert config.ontology_provider.execution_tool_names == frozenset({"gsf__text_to_sql", "gsf__text_to_pql"})
+    assert config.ontology_provider.analytical_tool_names == frozenset({"gsf__text_to_sql"})
+    assert config.ontology_provider.predictive_tool_names == frozenset({"gsf__text_to_pql"})
 
     with pytest.raises(ValueError, match="tool roles overlap"):
         data_science_register.DataScienceAgentConfig(
@@ -78,7 +80,7 @@ def test_config_validates_provider_neutral_tool_roles() -> None:
             ontology_provider={
                 "provider": "gsf",
                 "catalog_tools": ["gsf__catalog_search"],
-                "execution_tools": ["gsf__catalog_search"],
+                "analytical_tools": ["gsf__catalog_search"],
             },
         )
 
@@ -126,8 +128,9 @@ async def test_registration_passes_headless_mode_to_agent():
     )
     builder = MagicMock()
     catalog_tool = _dummy_search.model_copy(update={"name": "gsf__catalog_search"})
-    execution_tool = _dummy_search.model_copy(update={"name": "gsf__text_to_sql"})
-    builder.get_tools = AsyncMock(return_value=[catalog_tool, execution_tool])
+    analytical_tool = _dummy_search.model_copy(update={"name": "gsf__text_to_sql"})
+    predictive_tool = _dummy_search.model_copy(update={"name": "gsf__text_to_pql"})
+    builder.get_tools = AsyncMock(return_value=[catalog_tool, analytical_tool, predictive_tool])
     builder.get_llm = AsyncMock(return_value=MagicMock())
     config = data_science_register.DataScienceAgentConfig(
         llm="model",
@@ -136,7 +139,8 @@ async def test_registration_passes_headless_mode_to_agent():
         ontology_provider={
             "provider": "gsf",
             "catalog_tools": ["gsf__catalog_search"],
-            "execution_tools": ["gsf__text_to_sql"],
+            "analytical_tools": ["gsf__text_to_sql"],
+            "predictive_tools": ["gsf__text_to_pql"],
         },
         structured_catalog_call_limit=2,
         structured_text_to_sql_call_limit=6,
