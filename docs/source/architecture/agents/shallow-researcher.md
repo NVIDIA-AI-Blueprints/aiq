@@ -151,10 +151,18 @@ When `tool_iterations >= max_tool_iterations`, the agent appends a
 
 > "You have exhausted your research budget. Synthesize the final answer now
 > using the citations [1], [2] and the '## References' format.
-> Do not attempt any further tool calls."
+> Do not attempt any further tool calls. If fake tool-call markup appears in
+> your draft (XML or JSON schemas, or tags such as `<tool_call>`), drop it
+> and keep only the prose report; if none appears, just write the report.
+> Tool-call fragments are stripped and leave an empty answer."
 
 This combats the "Lost in the Middle" problem by placing the instruction at
 the end of the context window.
+
+If that **forced-synthesis** response has no visible content after
+`message.text` and `sanitize_report()`, the agent retries once without tools
+and with thinking disabled, using the same synthesis-anchor instruction. If
+that retry is also empty, it raises `shallow_research_empty_synthesis`.
 
 ## Citation Verification
 

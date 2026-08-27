@@ -84,6 +84,7 @@ class TestShallowResearcherAgent:
         llm = MagicMock()
         llm.ainvoke = AsyncMock()
         llm.bind_tools = MagicMock(return_value=llm)
+        llm.bind = MagicMock(return_value=llm)
         return llm
 
     @pytest.fixture
@@ -529,6 +530,50 @@ class TestShallowResearcherAgent:
         )
         assert synthesis_instruction_found
         assert captured_configs == [{"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}]
+        assert mock_llm.bind.call_count == 0
+
+    def _forced_synthesis_agent(self, mock_llm_provider, real_tool):
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+            max_tool_iterations=2,
+        )
+        state = ShallowResearchAgentState(
+            messages=[HumanMessage(content="Test query")],
+            tool_iterations=2,
+        )
+        return agent, state
+
+    @pytest.mark.asyncio
+    async def test_forced_synthesis_empty_response_retries_without_thinking(
+        self, mock_llm_provider, mock_llm, real_tool
+    ):
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                AIMessage(content=""),
+                AIMessage(content="Synthesized after retry"),
+            ]
+        )
+        agent, state = self._forced_synthesis_agent(mock_llm_provider, real_tool)
+
+        result = await agent.run(state)
+
+        assert result.messages[-1].content == "Synthesized after retry"
+        assert mock_llm.ainvoke.await_count == 2
+        mock_llm.bind.assert_called_once_with(chat_template_kwargs={"enable_thinking": False})
+        retry_prompt = mock_llm.ainvoke.await_args_list[1].args[0][-1]
+        assert "synthesize the final answer" in retry_prompt.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_forced_synthesis_empty_retry_raises(self, mock_llm_provider, mock_llm, real_tool):
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=""))
+        agent, state = self._forced_synthesis_agent(mock_llm_provider, real_tool)
+
+        with pytest.raises(RuntimeError, match="shallow_research_empty_synthesis"):
+            await agent.run(state)
+
+        assert mock_llm.ainvoke.await_count == 2
+        mock_llm.bind.assert_called_once_with(chat_template_kwargs={"enable_thinking": False})
 
 
 # ---------------------------------------------------------------------------

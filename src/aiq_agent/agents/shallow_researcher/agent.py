@@ -79,6 +79,14 @@ _REFERENCE_TARGET_RE = re.compile(
 )
 
 
+def _visible_report_text(message: Any) -> str:
+    """Return displayable report text after the public sanitizer runs."""
+    content = getattr(message, "text", "").strip()
+    if not content:
+        return ""
+    return sanitize_report(content).sanitized_report.strip()
+
+
 def _reference_entry_number(line: str, previous_number: int | None) -> int | None:
     """Return a reference number only for an unambiguous definition line."""
     match = _REFERENCE_ENTRY_LINE_RE.fullmatch(line)
@@ -427,66 +435,89 @@ class ShallowResearcherAgent:
 
             try:
                 draft_config = {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
+
                 if iterations >= self.max_tool_iterations:
                     logger.warning("Max iterations (%d) reached. Forcing synthesis.", iterations)
-
-                    # Anchor instruction at the end to combat "Loss in the Middle"
                     synthesis_anchor = HumanMessage(
                         content=(
                             "You have exhausted your research budget. Synthesize the final answer now "
                             "using the citations [1], [2] and the '## References' format. "
                             "Do not attempt any further tool calls."
+                            " If a fake tool-call markup appears in your draft (XML or JSON schemas, "
+                            "or tags such as <tool_call>), drop it and keep only the prose report;"
+                            " if none appears, just write the report. Tool-call fragments are "
+                            "stripped and leave an empty answer."
                         )
                     )
-
-                    full_messages = [system_message] + processed_history + [synthesis_anchor]
+                    synthesis_messages: list[Any] = [system_message, *processed_history, synthesis_anchor]
                     response = await ainvoke_with_relay(
                         self._get_llm(),
+                        synthesis_messages,
+                        callbacks=self.callbacks,
+                        config=draft_config,
+                    )
+                    if not _visible_report_text(response):
+                        logger.warning("Empty visible response; retrying without tools and with thinking disabled")
+                        retry_llm = self._get_llm()
+                        bind = getattr(retry_llm, "bind", None)
+                        if callable(bind):
+                            try:
+                                bound = bind(chat_template_kwargs={"enable_thinking": False})
+                                if bound is not None:
+                                    retry_llm = bound
+                            except Exception:
+                                pass
+                        response = await ainvoke_with_relay(
+                            retry_llm,
+                            synthesis_messages,
+                            callbacks=self.callbacks,
+                            config=draft_config,
+                        )
+                        if not _visible_report_text(response):
+                            raise RuntimeError(
+                                "shallow_research_empty_synthesis: synthesis returned empty content after one retry"
+                            )
+                else:
+                    llm = self._get_llm()
+                    llm_with_tools = llm.bind_tools(self.tools) if self.tools else llm
+                    full_messages = [system_message] + processed_history
+                    response = await ainvoke_with_relay(
+                        llm_with_tools,
                         full_messages,
                         callbacks=self.callbacks,
                         config=draft_config,
                     )
-                    return {"messages": [response], "tool_iterations": iterations}
 
-                llm = self._get_llm()
-                llm_with_tools = llm.bind_tools(self.tools) if self.tools else llm
-                full_messages = [system_message] + processed_history
-                response = await ainvoke_with_relay(
-                    llm_with_tools,
-                    full_messages,
-                    callbacks=self.callbacks,
-                    config=draft_config,
-                )
-
-                if self.tools and iterations == 0 and not getattr(response, "tool_calls", None):
-                    logger.warning("Shallow researcher returned an answer before collecting evidence; retrying once")
-                    tool_required = HumanMessage(
-                        content=(
-                            "Research is required before answering. Call exactly one available research tool now. "
-                            "Do not provide a final answer until the tool result is available."
+                    if self.tools and iterations == 0 and not getattr(response, "tool_calls", None):
+                        logger.warning(
+                            "Shallow researcher returned an answer before collecting evidence; retrying once"
                         )
-                    )
-                    retry_llm = llm.bind_tools(self.tools, parallel_tool_calls=False)
-                    response = await ainvoke_with_relay(
-                        retry_llm,
-                        full_messages + [response, tool_required],
-                        callbacks=self.callbacks,
-                        config=draft_config,
-                    )
-                    retry_tool_calls = getattr(response, "tool_calls", None) or []
-                    if len(retry_tool_calls) != 1 or retry_tool_calls[0].get("name") not in source_tool_names:
-                        raise RuntimeError(
-                            "shallow_research_tool_required: model did not call exactly one allowed research tool "
-                            "after one retry"
+                        tool_required = HumanMessage(
+                            content=(
+                                "Research is required before answering. Call exactly one available research "
+                                "tool now. Do not provide a final answer until the tool result is available."
+                            )
                         )
+                        retry_llm = llm.bind_tools(self.tools, parallel_tool_calls=False)
+                        response = await ainvoke_with_relay(
+                            retry_llm,
+                            full_messages + [response, tool_required],
+                            callbacks=self.callbacks,
+                            config=draft_config,
+                        )
+                        retry_tool_calls = getattr(response, "tool_calls", None) or []
+                        if len(retry_tool_calls) != 1 or retry_tool_calls[0].get("name") not in source_tool_names:
+                            raise RuntimeError(
+                                "shallow_research_tool_required: model did not call exactly one allowed "
+                                "research tool after one retry"
+                            )
 
-                new_iterations = iterations
-                if hasattr(response, "tool_calls") and response.tool_calls:
-                    added_calls = len(response.tool_calls)
-                    new_iterations += added_calls
-                    logger.info("Added %d tool calls to budget. Total: %d", added_calls, new_iterations)
+                    if getattr(response, "tool_calls", None):
+                        added_calls = len(response.tool_calls)
+                        logger.info("Added %d tool calls to budget. Total: %d", added_calls, iterations + added_calls)
+                        return {"messages": [response], "tool_iterations": iterations + added_calls}
 
-                return {"messages": [response], "tool_iterations": new_iterations}
+                return {"messages": [response], "tool_iterations": iterations}
 
             except Exception as ex:
                 logger.error(
@@ -599,7 +630,7 @@ class ShallowResearcherAgent:
         # Post-process: verify citations against source registry
         validated_result = dict(result)
         last_msg = validated_result["messages"][-1] if validated_result.get("messages") else None
-        content = str(last_msg.content) if last_msg is not None and getattr(last_msg, "content", None) else None
+        content = last_msg.text.strip() if last_msg is not None else None
 
         if not registry.all_sources():
             from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
