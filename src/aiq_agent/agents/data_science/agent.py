@@ -30,6 +30,7 @@ from aiq_agent.common import load_prompt
 from aiq_agent.common import reset_session_registry
 from aiq_agent.common import sanitize_report
 from aiq_agent.common import set_session_registry
+from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import verify_citations
 
 from .messages import is_clarification_request
@@ -256,6 +257,7 @@ class DataScienceAgent:
             context_schema=DataScienceAgentContext,
             name="data_science_agent",
         )
+        self.tools = agent_tools
         self.recursion_limit = recursion_limit
         self.source_tool_names = frozenset(tool_name_counts)
         self.callbacks = tuple(callbacks)
@@ -275,6 +277,9 @@ class DataScienceAgent:
 
     async def run(self, state: DataScienceAgentState) -> DataScienceAgentState:
         """Execute one request while preserving any caller-owned source registry."""
+        # Both the NAT registrar and the async job runner call this interface, so source
+        # selection and availability must be enforced here rather than by either adapter.
+        validate_research_source_configuration(state.data_sources, "data science", self.tools)
         self._validate_question(state)
         registry_token = None
         analysis_run_token = begin_analysis_run()

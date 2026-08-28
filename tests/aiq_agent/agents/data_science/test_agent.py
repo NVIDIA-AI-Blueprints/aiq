@@ -650,3 +650,40 @@ def test_gsf_calls_keep_distinct_request_receipts():
         "gsf__text_to_sql request request-1",
         "gsf__text_to_sql request request-1 (2)",
     ]
+
+
+@pytest.mark.asyncio
+async def test_run_rejects_empty_source_selection(monkeypatch):
+    """The async job runner constructs the agent directly and never calls the NAT
+    registrar, so `run` must enforce source selection itself."""
+    graph = MagicMock()
+    graph.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content="unreachable")]})
+    agent = _agent(graph, monkeypatch)
+    state = DataScienceAgentState(messages=[HumanMessage(content="Rank users")], data_sources=[])
+
+    with pytest.raises(EmptySourceRegistryError):
+        await agent.run(state)
+
+    graph.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_allows_an_unselected_source_list(monkeypatch):
+    """`None` means "every tool available to the agent", not "no sources"."""
+    grounded = [
+        ToolMessage(
+            content='{"request_id":"gsf-1","sql":"SELECT 1","rows":[{"value":1}]}',
+            name="gsf__text_to_sql",
+            tool_call_id="call-1",
+        ),
+        AIMessage(content="One row was returned [1].\n\n## Sources\n- [1] gsf__text_to_sql request gsf-1"),
+    ]
+    graph = MagicMock()
+    graph.ainvoke = AsyncMock(return_value={"messages": grounded})
+    agent = _agent(graph, monkeypatch)
+    state = DataScienceAgentState(messages=[HumanMessage(content="Rank users")], data_sources=None)
+
+    result = await agent.run(state)
+
+    graph.ainvoke.assert_awaited()
+    assert "One row was returned" in result.messages[-1].content

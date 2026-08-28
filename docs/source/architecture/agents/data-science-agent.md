@@ -123,6 +123,87 @@ only searches an existing collection. TLS verification remains enabled by
 default; trusted test routes using a self-signed chain can set
 `RAG_VERIFY_SSL=false` locally.
 
+## Async execution
+
+A data-science run routinely takes several minutes, which is longer than a
+browser tab can be relied on to stay open. The agent is therefore submitted as
+an async job rather than held open on a request: the HTTP call returns a
+`job_id` immediately and the run continues in a Dask worker. Closing or
+refreshing the page does not cancel it, and reconnecting to the same `job_id`
+replays the stored events and returns the final report.
+
+This reuses the shared async job API described in
+[REST API](../../integration/rest-api.md); no data-science-specific endpoint
+exists. The agent is registered as `data_science` in the async agent registry,
+so it appears in `GET /v1/jobs/async/agents` whenever the active workflow
+configures a `data_science_agent` function.
+
+```bash
+# Submit; returns immediately with a job_id
+curl -X POST http://localhost:8000/v1/jobs/async/submit \
+  -H 'Content-Type: application/json' \
+  -d '{"agent_type": "data_science", "input": "Which regions missed forecast last quarter?"}'
+
+# Reconnect at any time, including after a page refresh
+curl -N http://localhost:8000/v1/jobs/async/job/<job_id>/stream
+
+# Or resume from the last event a client already received
+curl -N http://localhost:8000/v1/jobs/async/job/<job_id>/stream/<last_event_id>
+```
+
+Serve the web profile, which adds the `aiq_api` front end:
+
+```bash
+dotenv -f deploy/.env run nat serve \
+  --config_file configs/config_web_data_science.yml --port 8000
+```
+
+Async jobs run in a worker that reloads the config file, so
+`NAT_CONFIG_FILE` must point at the same profile and
+`NAT_DASK_SCHEDULER_ADDRESS` must be set. Without them the submit route is
+replaced by a guarded stub that returns 503.
+
+### Routing from the chat UI
+
+`configs/config_web_data_science_hybrid.yml` wires the agent into the chat
+router so a browser request can reach it. Three pieces are required together:
+
+- `intent_classifier` must use `_type: context_aware_intent_router`. The plain
+  `intent_classifier` has no `hybrid_research` route, so DS is unreachable
+  without this regardless of the rest.
+- `data_science_hybrid_adapter` must be defined with an `agent` reference.
+- `workflow.hybrid_research_agent` must point at that adapter.
+
+The router probes the GSF catalog on each research request. A request carrying
+an explicit `database_name` always takes the Hybrid path; an unscoped request
+takes it only when catalog coverage clears `catalog_confidence_threshold`,
+otherwise it falls back to shallow or deep. That threshold is deployment
+specific and needs tuning against real catalog content.
+
+When a submitter is configured the router submits DS as an async job and
+returns a `job_escalation` message carrying the job id, which the web UI
+consumes exactly as it does a deep-research job. Without a submitter — the
+synchronous CLI, which has no job store — the hybrid route still runs inline.
+
+### Behavior differences from a synchronous run
+
+- **Interaction mode is forced to `headless`.** A worker has no channel back to
+  the user, so a clarifying question would strand the job in a terminal
+  question instead of an answer. Clarification is a pre-submission concern,
+  exactly as it is for deep research. The configured `interaction_mode` is
+  honored only on the synchronous CLI path.
+- **Progress is streamed as SSE events**, not returned in one response. Tool
+  calls, model turns, and the citation-verified final report are emitted
+  through the standard job event stream.
+- **Sandbox concurrency caps apply.** When `AIQ_MAX_SANDBOXES_PER_PRINCIPAL` or
+  `AIQ_MAX_SANDBOXES_GLOBAL` is set, submissions are capped for agents that
+  reach a sandbox — including through the `stateful_python` tool, which owns
+  the sandbox reference rather than the agent config.
+- **Per-request analysis artifacts still belong to the run.** The temporary
+  analysis directory and any OpenShell sandbox are created and released inside
+  the agent run, so cancellation and expiry release them the same way a
+  synchronous run does.
+
 ## Product Hybrid integration
 
 The context-aware Chat Researcher router performs one bounded GSF catalog probe
