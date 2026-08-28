@@ -540,7 +540,6 @@ functions:
       provider: gsf
       catalog_tools: [gsf__catalog_search]
       analytical_tools: [gsf__text_to_sql]
-      predictive_tools: [gsf__text_to_pql]
     response_mode: standard
     structured_catalog_call_limit: 2
     structured_text_to_sql_call_limit: 6

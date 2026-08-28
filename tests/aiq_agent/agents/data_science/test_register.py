@@ -401,6 +401,34 @@ async def test_direct_workflow_returns_typed_no_source_response():
 
 
 @pytest.mark.asyncio
+async def test_direct_workflow_maps_request_context():
+    agent_fn = MagicMock()
+    agent_fn.ainvoke = AsyncMock(return_value=DataScienceAgentState(messages=[AIMessage(content="done")]))
+    builder = MagicMock()
+    builder.get_function = AsyncMock(return_value=agent_fn)
+    config = data_science_register.DataScienceWorkflowConfig()
+
+    registration = data_science_register.data_science_workflow.__wrapped__(config, builder)
+    function_info = await anext(registration)
+    try:
+        response = await function_info.single_fn(
+            {
+                "text": "Rank users",
+                "data_sources": ["structured_data"],
+                "database_name": "benchmark_db",
+            }
+        )
+    finally:
+        await registration.aclose()
+
+    invoked_state = agent_fn.ainvoke.await_args.args[0]
+    assert invoked_state.messages == [HumanMessage(content="Rank users")]
+    assert invoked_state.data_sources == ["structured_data"]
+    assert invoked_state.database_name == "benchmark_db"
+    assert response.choices[0].message.content == "done"
+
+
+@pytest.mark.asyncio
 async def test_hybrid_adapter_maps_router_context_and_returns_only_final_response():
     catalog = CatalogRoutingResponse(
         request_id="catalog-1",

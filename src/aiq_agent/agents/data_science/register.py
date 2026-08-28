@@ -305,6 +305,7 @@ async def data_science_workflow(config: DataScienceWorkflowConfig, builder: Buil
                 DataScienceAgentState(
                     messages=[HumanMessage(content=request_context.query_text)],
                     data_sources=request_context.data_sources,
+                    database_name=request_context.database_name,
                 )
             )
             content = str(result.messages[-1].content)
