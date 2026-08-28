@@ -85,6 +85,46 @@ def test_config_validates_provider_neutral_tool_roles() -> None:
         )
 
 
+def test_ontology_provider_tools_must_be_mapped_to_one_registry_source() -> None:
+    provider = data_science_register.DataScienceAgentConfig(
+        llm="model",
+        ontology_provider={
+            "provider": "gsf",
+            "catalog_tools": ["gsf__catalog_search"],
+            "analytical_tools": ["gsf__text_to_sql"],
+            "predictive_tools": ["gsf__text_to_pql"],
+        },
+    ).ontology_provider
+    assert provider is not None
+
+    try:
+        reset_registry()
+        populate_from_config(
+            [
+                {"id": "catalog", "name": "Catalog", "tools": ["gsf__catalog_search"]},
+                {"id": "execution", "name": "Execution", "tools": ["gsf__text_to_sql", "gsf__text_to_pql"]},
+            ]
+        )
+        with pytest.raises(ValueError, match="must map to the same data source"):
+            data_science_register._validate_ontology_provider_source_mapping(provider)
+
+        reset_registry()
+        populate_from_config(
+            [{"id": "structured_data", "name": "GSF", "tools": ["gsf__catalog_search", "gsf__text_to_sql"]}]
+        )
+        with pytest.raises(ValueError, match=r"unmapped tools: gsf__text_to_pql"):
+            data_science_register._validate_ontology_provider_source_mapping(provider)
+
+        reset_registry()
+        populate_from_config(
+            [{"id": "structured_data", "name": "GSF", "tools": ["gsf"]}],
+            group_names={"gsf"},
+        )
+        data_science_register._validate_ontology_provider_source_mapping(provider)
+    finally:
+        reset_registry()
+
+
 @pytest.mark.asyncio
 async def test_registration_inherits_registry_refs_and_runs_selected_tools():
     reset_registry()

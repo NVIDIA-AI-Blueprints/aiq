@@ -20,6 +20,7 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import get_all_tool_refs
+from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
@@ -147,6 +148,25 @@ def _active_ontology_provider(
     return provider
 
 
+def _validate_ontology_provider_source_mapping(provider: OntologyProviderConfig | None) -> None:
+    """Require every configured ontology tool role to share one registry source."""
+
+    if provider is None:
+        return
+
+    source_by_tool = {tool_name: get_source_id_for_tool(tool_name) for tool_name in provider.tool_names}
+    unmapped = sorted(tool_name for tool_name, source_id in source_by_tool.items() if source_id is None)
+    if unmapped:
+        raise ValueError(
+            f"ontology provider tools must be mapped in data_source_registry; unmapped tools: {', '.join(unmapped)}"
+        )
+
+    source_ids = {source_id for source_id in source_by_tool.values() if source_id is not None}
+    if len(source_ids) != 1:
+        mappings = ", ".join(f"{tool_name} -> {source_by_tool[tool_name]}" for tool_name in sorted(source_by_tool))
+        raise ValueError(f"ontology provider tools must map to the same data source; mappings: {mappings}")
+
+
 @register_function(config_type=DataScienceAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
     """Resolve configured AI-Q tools and compose one contiguous ReAct loop."""
@@ -156,6 +176,7 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
         excluded = set(config.exclude_tools)
         tools = [tool for tool in tools if tool.name not in excluded]
 
+    _validate_ontology_provider_source_mapping(config.ontology_provider)
     validate_research_source_configuration(None, "data science", tools)
 
     llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)

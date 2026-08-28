@@ -557,7 +557,7 @@ functions:
 | `exclude_tools` | `list[str]` | `[]` | Exact runtime tool names removed after inherited or explicit tools are resolved. |
 | `interaction_mode` | `interactive` or `headless` | `interactive` | In `headless` mode, never wait for clarification; resolve supported assumptions and perform one bounded synthesis retry if needed. |
 | `response_mode` | `standard` or `fdabench_choice` | `standard` | In `fdabench_choice` mode, preserve explicitly supplied option labels and emit an `Answer:` marker; non-choice requests retain normal report behavior. |
-| `ontology_provider` | object or `None` | `None` | Assign one provider identifier, non-empty `catalog_tools` and `analytical_tools` lists, and optional `predictive_tools`. Referenced tools must also be enabled through `tools` or `data_source_registry`. |
+| `ontology_provider` | object or `None` | `None` | Assign one provider identifier, non-empty `catalog_tools` and `analytical_tools` lists, and optional `predictive_tools`. Every referenced tool must be enabled and mapped to the same `data_source_registry` source. |
 | `structured_catalog_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on ontology catalog calls. Minimum `1`; exact cache hits do not count. |
 | `structured_text_to_sql_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on ontology-provider text-to-SQL calls. Predictive execution is not included. Minimum `1`; exact cache hits do not count. |
 | `structured_cache_repeated_calls` | `bool` | `true` | Reuse exact repeated catalog and text-to-SQL calls within one agent request. Cache state never crosses requests. |
