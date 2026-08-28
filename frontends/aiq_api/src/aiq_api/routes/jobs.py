@@ -1750,6 +1750,20 @@ async def _get_job_artifacts(db_url: str, job_id: str) -> dict | None:
         return None
 
 
+def _format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+    """Format a Server-Sent Events frame.
+
+    Only frames backed by a real event-store row carry an ``id:`` line.
+    Synthetic control frames (``stream.mode``, ``job.status``, ``job.shutdown``,
+    ``job.error``) omit it so the browser's ``EventSource.lastEventId`` stays
+    anchored to the last persisted event. Otherwise a reconnect would resume the
+    ``WHERE id > :after_id`` event-store query from a fabricated id and silently
+    skip the next real event.
+    """
+    id_line = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{id_line}event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
 async def _sse_generator(job_store, job_id: str, db_url: str, start_event_id: int = 0):
     """
     Route to appropriate SSE generator based on database type.
@@ -1802,7 +1816,6 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     connection_manager = get_connection_manager()
     last_status = None
     last_event_id = start_event_id
-    sequence_id = start_event_id
     terminal_statuses = {JobStatus.SUCCESS.value, JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value}
     is_reconnect = start_event_id > 0
     # Emit an SSE keepalive comment after this many seconds of silence so an
@@ -1812,14 +1825,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     SSE_KEEPALIVE_INTERVAL = 15.0
     last_keepalive = time.monotonic()
 
-    def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
-        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
-        nonlocal sequence_id
-        if event_id is not None:
-            sequence_id = event_id
-        else:
-            sequence_id += 1
-        return f"id: {sequence_id}\nevent: {event_type}\ndata: {json.dumps(data)}\n\n"
+    format_sse = _format_sse
 
     # LISTEN/NOTIFY needs a persistent session — incompatible with PgBouncer
     # transaction pooling. Use AIQ_LISTEN_DB_URL to point directly at PostgreSQL.
@@ -2020,7 +2026,6 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     connection_manager = get_connection_manager()
     last_status = None
     last_event_id = start_event_id
-    sequence_id = start_event_id
     terminal_statuses = {JobStatus.SUCCESS.value, JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value}
     is_reconnect = start_event_id > 0
     in_replay_mode = True
@@ -2031,14 +2036,7 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     SSE_KEEPALIVE_INTERVAL = 15.0
     last_keepalive = time.monotonic()
 
-    def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
-        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
-        nonlocal sequence_id
-        if event_id is not None:
-            sequence_id = event_id
-        else:
-            sequence_id += 1
-        return f"id: {sequence_id}\nevent: {event_type}\ndata: {json.dumps(data)}\n\n"
+    format_sse = _format_sse
 
     logger.info(
         f"SSE polling stream starting for job_id={job_id}, start_event_id={start_event_id}, db_url={db_url[:50]}"
