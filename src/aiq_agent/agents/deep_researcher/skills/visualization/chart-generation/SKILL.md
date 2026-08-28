@@ -233,7 +233,10 @@ row>", "label": "optional" }`; optional `y` = `{ "label": "optional unit", "form
 compact | percent | currency" }`; `series` = `[ { "key": "<numeric field>", "label": "optional",
 "color": "green | blue | amber | red" } ]`; `data` = rows as objects with raw numbers (fractions
 0-1 for `percent`); optional `kpis` = `[ { "label": "...", "value": "preformatted", "tone": "accent
-| warn | alarm" } ]`. A `delta` chart encodes exactly one series.
+| warn | alarm" } ]`. A `delta` chart encodes exactly one series. Each data row is one
+flat object that includes the `x` key and every series key as fields (for example
+`{"company":"NVIDIA","revenue":115.3}`); never use the category value itself as the key
+(not `{"NVIDIA":115.3}`), and never reuse the same key for `x` and a series.
 
 Example (ranking):
 

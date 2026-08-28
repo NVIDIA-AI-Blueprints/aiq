@@ -55,6 +55,8 @@ Chart types: `bar` (category magnitudes), `hbar` (rankings with long text labels
 
 Spec fields: `type`; `title` (short) and optional `subtitle`; `x` = `{ "key": "<field in each row>", "label": "optional" }`; optional `y` = `{ "label": "optional unit", "format": "number | compact | percent | currency" }`; `series` = `[ { "key": "<numeric field>", "label": "optional", "color": "green | blue | amber | red" } ]`; `data` = rows as objects with raw numbers (fractions 0-1 for `percent`); optional `kpis` = `[ { "label": "...", "value": "preformatted", "tone": "accent | warn | alarm" } ]`.
 
+Each data row is one flat object that includes the `x` key and every series key as fields (for example `{"company":"NVIDIA","revenue":115.3}`); never use the category value itself as the key (not `{"NVIDIA":115.3}`), and never reuse the same key for `x` and a series.
+
 Example (ranking):
 ```chart
 {"type":"hbar","title":"Top suppliers by late shipments","x":{"key":"supplier"},"y":{"format":"number"},"series":[{"key":"late","color":"amber"}],"data":[{"supplier":"Acme","late":42},{"supplier":"Globex","late":31},{"supplier":"Initech","late":19}]}

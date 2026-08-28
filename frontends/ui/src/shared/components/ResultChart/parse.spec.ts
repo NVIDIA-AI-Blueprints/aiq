@@ -16,6 +16,14 @@ const barSpec = {
   ],
 }
 const lineSpec = { ...barSpec, type: 'line' }
+const singleKeyRowSpec = {
+  type: 'hbar',
+  title: 'FY2025 Data Center Revenue Comparison',
+  x: { key: 'revenue', label: 'Revenue (USD billions)' },
+  y: { label: 'Company' },
+  series: [{ key: 'revenue', color: 'green' }],
+  data: [{ NVIDIA: 115.3 }, { AMD: 12.6 }, { Intel: 9.1 }],
+}
 
 describe('toNumber', () => {
   test('numbers pass through, non-finite becomes null', () => {
@@ -81,6 +89,53 @@ describe('parseChartSpec', () => {
     }
     expect(parseChartSpec(JSON.stringify(spec))).toBeNull()
   })
+
+  test('repairs a single-key-row spec into a renderable chart', () => {
+    const spec = parseChartSpec(JSON.stringify(singleKeyRowSpec))
+    expect(spec).not.toBeNull()
+    if (!spec) return
+    expect(spec.data).toHaveLength(3)
+    expect(spec.data.every((row) => row[spec.x.key] != null && row[spec.x.key] !== '')).toBe(true)
+    expect(spec.series).toHaveLength(1)
+    expect(spec.data.map((row) => toNumber(row[spec.series[0].key]))).toEqual([115.3, 12.6, 9.1])
+    expect(spec.series[0].color).toBe('green')
+  })
+
+  test('single keys that match a declared field or repeat stay un-repairable', () => {
+    const base = { ...singleKeyRowSpec, x: { key: 'company' }, series: [{ key: 'revenue', color: 'green' }] }
+    const fieldNameKeyed = { ...base, data: [{ revenue: 115.3 }, { revenue: 12.6 }, { revenue: 9.1 }] }
+    expect(parseChartSpec(JSON.stringify(fieldNameKeyed))).toBeNull()
+    const repeatedLabel = { ...base, data: [{ Acme: 1 }, { Acme: 2 }] }
+    expect(parseChartSpec(JSON.stringify(repeatedLabel))).toBeNull()
+  })
+
+  test('multi-series single-key-row specs stay un-repairable', () => {
+    const multiSeries = {
+      ...singleKeyRowSpec,
+      x: { key: 'company' },
+      series: [
+        { key: 'q1', color: 'green' },
+        { key: 'q2', color: 'blue' },
+      ],
+      data: [{ NVIDIA: 115.3 }, { AMD: 12.6 }, { Intel: 9.1 }],
+    }
+    expect(parseChartSpec(JSON.stringify(multiSeries))).toBeNull()
+  })
+
+  test('a well-formed spec is not altered by the repair fallback', () => {
+    expect(parseChartSpec(JSON.stringify(barSpec))).toEqual(ChartSpecSchema.parse(barSpec))
+  })
+
+  test('rows with multiple keys and no matching x key stay un-repairable', () => {
+    const spec = { ...barSpec, x: { key: 'missing' } }
+    expect(parseChartSpec(JSON.stringify(spec))).toBeNull()
+  })
+
+  test('carousel and kpi parsing are unaffected by the repair fallback', () => {
+    const carousel = { title: 'Trends', charts: [lineSpec, lineSpec] }
+    expect(parseCarouselSpec(JSON.stringify(carousel))?.charts).toHaveLength(2)
+    expect(parseKpiSpec(JSON.stringify({ kpis: [{ label: 'A', value: '1' }] }))?.kpis).toHaveLength(1)
+  })
 })
 
 describe('ChartSpecSchema delta refinement', () => {
@@ -109,6 +164,16 @@ describe('parseCarouselSpec', () => {
     const badChild = { ...lineSpec, x: { key: 'missing' } }
     const spec = { title: 'Trends', charts: [lineSpec, badChild] }
     expect(parseCarouselSpec(JSON.stringify(spec))).toBeNull()
+  })
+
+  test('repairs a single-key-row child so the carousel renders it', () => {
+    const singleKeyLine = { ...singleKeyRowSpec, type: 'line' }
+    const spec = { title: 'Trends', charts: [lineSpec, singleKeyLine] }
+    const parsed = parseCarouselSpec(JSON.stringify(spec))
+    expect(parsed?.charts).toHaveLength(2)
+    const repaired = parsed?.charts[1]
+    expect(repaired?.x.key).toBe('category')
+    expect(repaired?.data.every((row) => row['category'] != null && toNumber(row['value']) != null)).toBe(true)
   })
 })
 
