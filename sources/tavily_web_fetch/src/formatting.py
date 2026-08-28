@@ -13,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Window, render, and parse fetched pages for model context and citations.
+"""Window and render fetched pages for model context.
 
-The scoped parser prevents outbound links in fetched content from being registered as pages the agent read.
+Rendering is deliberately separate from citation bookkeeping. Which pages are citable is decided
+by ``register``, from the pages an invocation actually read, and never by re-reading this module's
+output -- so a page that reproduces the format cannot name a source the agent never saw.
 """
 
 from __future__ import annotations
@@ -23,14 +25,6 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from aiq_agent.common.citation_verification import SourceEntry
-
-# Anchored to a line start because every marker this module writes begins one. Page bodies are
-# neutralized, so this is defence in depth rather than the primary guard.
-_OPEN_RE = re.compile(r'^<fetched_page url="([^"]*)" title="([^"]*)" status="([a-z]+)">', re.MULTILINE)
 
 # Retrieved text may contain our own section marker, by accident (a page documenting this format)
 # or by design (a page forging a source the agent never read). Neutralizing it at ingestion keeps
@@ -299,42 +293,12 @@ def render_skipped_section(page: FetchedPage, *, max_chars_per_call: int) -> str
     )
 
 
-def parse_fetched_pages(content: str, tool_name: str) -> list[SourceEntry] | None:
-    """Return citable, successfully fetched pages, or ``None`` if this output is not ours.
+def looks_like_our_output(content: str) -> bool:
+    """Return whether ``content`` wears the preamble this module puts on every rendered result.
 
-    This is a shape check, not an authorization check. The preamble it looks for is a published
-    constant, so it establishes only that the content was rendered by this module -- not that the
-    tool which produced it was one of ours. ``register._parse_owned_pages`` settles ownership
-    first, by resolving the tool name against NAT's function table; this check then guards against
-    an owned instance being handed output it did not render. Testing for the section marker
-    instead would be looser still, since a search snippet may quote it.
-
-    Returning ``None`` declines the content so another parser, or the generic URL fallback,
-    handles it.
+    This is a shape check, not an authorization check: the preamble is a published constant, so
+    any tool could reproduce it. ``register`` uses it only to decide how to decline content it has
+    no invocation record for -- output shaped like ours is claimed and yields nothing, so a
+    forgery never reaches the generic URL extractor.
     """
-    if not content.lstrip().startswith(_PREAMBLE):
-        return None
-
-    try:
-        from aiq_agent.common.citation_verification import SourceEntry
-    except ImportError:  # pragma: no cover - package used outside an AI-Q install
-        return []
-
-    entries = []
-    seen: set[str] = set()
-    for url, title, status in _OPEN_RE.findall(content):
-        if status != "ok":
-            continue
-        resolved = html.unescape(url).strip()
-        if not resolved or resolved in seen:
-            continue
-        seen.add(resolved)
-        entries.append(
-            SourceEntry(
-                url=resolved,
-                title=html.unescape(title).strip() or None,
-                source_type="url",
-                tool_name=tool_name,
-            )
-        )
-    return entries
+    return content.lstrip().startswith(_PREAMBLE)

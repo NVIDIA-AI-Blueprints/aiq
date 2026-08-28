@@ -20,9 +20,13 @@ detects soft 404 pages and handles the ``AttributeError`` raised by ``langchain_
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
+import threading
+from collections import OrderedDict
+from typing import TYPE_CHECKING
 from typing import Literal
 from urllib.parse import urlparse
 
@@ -38,23 +42,43 @@ from nat.data_models.function import FunctionBaseConfig
 from .formatting import WRAP_WIDTH
 from .formatting import FetchedPage
 from .formatting import compact
-from .formatting import parse_fetched_pages
+from .formatting import looks_like_our_output
 from .formatting import render_page_section
 from .formatting import render_result
 from .formatting import render_skipped_section
 from .formatting import select_window
+
+if TYPE_CHECKING:
+    from aiq_agent.common.citation_verification import SourceEntry
 
 logger = logging.getLogger(__name__)
 
 _missing_key_warned = False
 _parser_registered = False
 
-# One entry per live instance of this tool. NAT hands each build its builder, whose function table
-# maps every YAML key in the workflow to the config it was built from. That mapping comes from the
-# operator's file and never from tool output, so it is the one ownership signal retrieved page
-# content cannot forge. A list rather than a single builder because one process can build several
-# workflows; entries are dropped when the function they belong to is torn down.
-_owning_builders: list[Builder] = []
+# Which pages each workflow run read, as {run id: {exact result returned: pages read}}.
+#
+# Ownership has to answer "did an invocation belonging to *this* workflow produce this result?",
+# and neither half of what parser dispatch hands us can answer it. The tool name cannot: the
+# parser is registered process-globally and two concurrent workflows may use the same YAML key for
+# different tools, so a name-based check lets either vouch for the other's output. The content
+# cannot either: any string can be replayed by whoever has seen it, so a check that reduces to
+# "some invocation somewhere once produced these bytes" is a process-wide bearer token.
+#
+# The run id supplies the missing identity. NAT mints one per workflow run and contextvars are
+# inherited by the tasks a run spawns, so an invocation and the citation middleware that later
+# inspects its result read the same value, while a concurrent run reads a different one. Scoping
+# the ledger by it makes a record unreachable outside the run that created it -- replayed bytes
+# included. Within a run the result string then selects which record applies, and the citable URLs
+# come from that record rather than from re-reading the text.
+#
+# Both levels are bounded because nothing else prunes them. Capture runs immediately after the
+# tool returns, in the same middleware that awaited it, so a record only has to outlive that
+# hand-off.
+_RUN_LEDGER_MAX = 32
+_OUTPUTS_PER_RUN_MAX = 256
+_run_ledgers: OrderedDict[str, OrderedDict[str, list[tuple[str, str]]]] = OrderedDict()
+_ledger_lock = threading.Lock()
 
 _SOFT_404_MARKERS = (
     "page not found",
@@ -208,34 +232,101 @@ def _relaxed_key(url: str) -> str:
     return parsed._replace(path=path).geturl()
 
 
-def _instance_is_ours(tool_name: str) -> bool:
-    """Return whether ``tool_name`` is a YAML key built from this tool's config.
+def _digest(content: str) -> str:
+    """Return the within-run ledger key for one rendered result."""
+    return hashlib.sha256(content.encode("utf-8", "surrogatepass")).hexdigest()
 
-    The name is unavailable while this package is being built -- NAT assigns it after the build
-    function returns -- but it is available by the time a parser runs, which is what makes this
-    check possible at all. Anything unknown is treated as not ours.
+
+def _current_run_id() -> str | None:
+    """Return the NAT workflow run this call belongs to, or ``None`` outside a run.
+
+    NAT sets this once per run -- ``NatRunner`` mints a UUID when a request carries none, and the
+    AI-Q job runner sets it to the job id -- so it names the workflow instance rather than the
+    process. Reading it from the ambient context is what lets ownership be established without the
+    parser API carrying an identity argument.
     """
-    for owner in _owning_builders:
-        try:
-            config = owner.get_function_config(tool_name)
-        except Exception:  # noqa: BLE001 - an unresolvable name simply is not ours
-            continue
-        if isinstance(config, TavilyWebFetchToolConfig):
-            return True
-    return False
+    try:
+        from nat.builder.context import Context
 
-
-def _parse_owned_pages(content: str, tool_name: str) -> list | None:
-    """Parse fetched pages only for output produced by one of this tool's own instances.
-
-    Content alone cannot establish ownership: the preamble ``parse_fetched_pages`` looks for is a
-    published constant, so any tool that emitted it first would have its output claimed and its
-    real sources discarded. The name check is the authorization boundary; the preamble check
-    inside ``parse_fetched_pages`` remains as a second gate on the output's shape.
-    """
-    if not _instance_is_ours(tool_name):
+        return Context.get().workflow_run_id
+    except Exception:  # noqa: BLE001 - no NAT context means no run to scope ownership to
         return None
-    return parse_fetched_pages(content, tool_name)
+
+
+def _record_output(rendered: str, citable: list[tuple[str, str]]) -> None:
+    """Record the pages one invocation read, under the run that invoked it.
+
+    A call outside any NAT run records nothing. There is no session to scope ownership to, so
+    keeping the record would put it where every other run could reach it -- which is the bearer
+    token this design exists to avoid. Every path that serves a workflow (``nat run``, ``nat
+    serve``, ``nat eval``, the async job runner) establishes a run id first.
+    """
+    run_id = _current_run_id()
+    if run_id is None:
+        logger.debug("tavily_web_fetch: no workflow run in context; fetched pages will not be citable")
+        return
+
+    key = _digest(rendered)
+    with _ledger_lock:
+        ledger = _run_ledgers.setdefault(run_id, OrderedDict())
+        _run_ledgers.move_to_end(run_id)
+        ledger[key] = citable
+        ledger.move_to_end(key)
+        while len(ledger) > _OUTPUTS_PER_RUN_MAX:
+            ledger.popitem(last=False)
+        while len(_run_ledgers) > _RUN_LEDGER_MAX:
+            _run_ledgers.popitem(last=False)
+
+
+def _recorded_pages(content: str) -> list[tuple[str, str]] | None:
+    """Return the pages this run recorded for this exact result, or ``None`` if there is no record.
+
+    Another run's record is not consulted even when the bytes match, so replaying a result
+    captured from a different workflow finds nothing.
+    """
+    run_id = _current_run_id()
+    if run_id is None:
+        return None
+
+    key = _digest(content)
+    with _ledger_lock:
+        ledger = _run_ledgers.get(run_id)
+        if ledger is None:
+            return None
+        recorded = ledger.get(key)
+        if recorded is not None:
+            _run_ledgers.move_to_end(run_id)
+            ledger.move_to_end(key)
+    return recorded
+
+
+def _parse_owned_pages(content: str, tool_name: str) -> "list[SourceEntry] | None":
+    """Return citations only for a result this workflow run's own invocations produced.
+
+    Ownership is settled by the run-scoped ledger, not by the tool name and not by the content:
+    only an invocation belonging to this run can put a record there, and the URLs come from that
+    record rather than from parsing the text back out. A result another run produced is not ours
+    even byte for byte, so replaying one earns nothing.
+
+    An unrecorded result is normally declined with ``None`` so its own parser, or the generic URL
+    extractor, still handles it with its sources intact. The exception is a result wearing our
+    preamble that we have no record of -- a forgery, or output altered between the tool and the
+    registry. Declining that would hand it to the generic extractor, which reads every URL in the
+    body, so it is claimed and yields nothing instead. Fail closed: a page the agent read may lose
+    its citation, but no page it never read gains one.
+    """
+    recorded = _recorded_pages(content)
+    if recorded is None:
+        return [] if looks_like_our_output(content) else None
+
+    try:
+        from aiq_agent.common.citation_verification import SourceEntry
+    except ImportError:  # pragma: no cover - package used outside an AI-Q install
+        return []
+
+    return [
+        SourceEntry(url=url, title=title or None, source_type="url", tool_name=tool_name) for url, title in recorded
+    ]
 
 
 async def _extract(tool, urls: list[str], *, extract_depth: str, timeout_seconds: int) -> tuple[list[dict], str]:
@@ -290,9 +381,8 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
         return
 
     # Replace the generic URL scraper so outbound links do not become sources the agent never read.
-    # The matcher accepts every name because the dispatcher lowercases it before matching, while a
-    # function-table lookup needs the key exactly as written; ``_parse_owned_pages`` therefore does
-    # the ownership check itself, against the unmodified name the dispatcher passes the parser.
+    # The matcher accepts every name because the operator picks the YAML key and the name carries
+    # no authority anyway; ``_parse_owned_pages`` settles ownership against the ledger instead.
     # Every other tool's output is declined with None and falls through to the next parser or the
     # generic extractor with its own sources intact.
     global _parser_registered
@@ -404,6 +494,10 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
         remaining = tool_config.max_chars_per_call
         any_success = False
         rendered: set[str] = set()
+        # The pages this call genuinely read and showed, in the order they were rendered. This
+        # list -- not the rendered text -- is what the citation registry is later handed.
+        citable: list[tuple[str, str]] = []
+        cited: set[str] = set()
         for candidate in requested:
             page = pages.get(candidate) or pages.get((candidate or "").strip())
             if page is None:  # pragma: no cover - every requested URL receives a result above
@@ -427,6 +521,12 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
             window = select_window(page.text, max_chars=budget, query=query or "", start_line=start_line)
             remaining -= window.shown_chars
             sections.append(render_page_section(page, window))
+            # Only a page shown in full confidence is citable: failures never reach here, skipped
+            # pages returned above, and a suspect soft 404 is content the model was told not to
+            # cite. Two requested URLs can redirect to one resolved page, so dedupe on that.
+            if page.status == "ok" and page.citable_url not in cited:
+                cited.add(page.citable_url)
+                citable.append((page.citable_url, page.title))
 
         if not any_success:
             # The prefix keeps a wholly failed fetch non-citable and feeds the source-tool circuit breaker.
@@ -435,18 +535,14 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
             )
             return f"Error: none of the requested URLs could be read.\n{reasons}"
 
-        return render_result(sections)
+        result = render_result(sections)
+        # Record before returning. The registry resolves ownership by looking this exact string
+        # up, so the record has to exist by the time the caller can hand the string over.
+        _record_output(result, citable)
+        return result
 
-    # Scoped to this function's lifetime so a torn-down workflow stops vouching for its names, and
-    # so a process that builds several workflows can resolve the names of all of them.
-    if builder is not None:
-        _owning_builders.append(builder)
-    try:
-        yield FunctionInfo.from_fn(
-            _fetch_url,
-            input_schema=FetchUrlInput,
-            description=_fetch_url.__doc__,
-        )
-    finally:
-        if builder is not None and builder in _owning_builders:
-            _owning_builders.remove(builder)
+    yield FunctionInfo.from_fn(
+        _fetch_url,
+        input_schema=FetchUrlInput,
+        description=_fetch_url.__doc__,
+    )

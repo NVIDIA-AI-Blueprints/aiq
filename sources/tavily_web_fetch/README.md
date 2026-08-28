@@ -112,10 +112,11 @@ Tool output labels retrieved content as untrusted, wraps each page in a `<fetche
 with HTML-escaped attributes, and numbers every line. This follows the standard practice of
 segregating and identifying external content: it keeps a clear boundary between instructions and
 retrieved data, and gives the model explicit provenance. Of the sources this tool contributes, only
-pages it actually read can be cited. Its citation parser claims a result only when the tool that
-produced it resolves, through the workflow's own configuration, to an instance of this tool -- a
-signal retrieved page content cannot influence -- and within that result only successfully fetched
-pages are registered.
+pages it actually read can be cited. Each call records the pages it successfully read under the
+workflow run that made the call, and the citation parser serves that run's record rather than
+re-reading the result text -- so a tool name, a page reproducing this format, a concurrent
+workflow reusing the same configuration key, and a replay of another run's result are all unable
+to add a source. A call made outside a workflow run is not citable at all.
 
 **These are prompt-level and bookkeeping measures, not an enforcement boundary.** They raise the
 cost of an attack; they do not prevent one.
