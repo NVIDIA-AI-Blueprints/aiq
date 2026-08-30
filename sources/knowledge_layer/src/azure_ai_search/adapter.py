@@ -56,6 +56,8 @@ from aiq_agent.knowledge.base import FileInfo
 from aiq_agent.knowledge.base import TTLCleanupMixin
 from aiq_agent.knowledge.schema import FileStatus
 
+from ..utils import summarize_document
+
 logger = logging.getLogger(__name__)
 
 _BACKEND_NAME = "azure_ai_search"
@@ -78,6 +80,7 @@ _RECORD_FILE = "file"
 _RECORD_CHUNK = "chunk"
 _COLLECTION_ACTIVE = "active"
 _COLLECTION_DELETING = "deleting"
+_DEFAULT_SUMMARY = "No summary available"
 
 COLLECTION_TTL_HOURS = float(os.environ.get("AIQ_COLLECTION_TTL_HOURS", "24"))
 TTL_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("AIQ_TTL_CLEANUP_INTERVAL_SECONDS", "3600"))
@@ -1091,7 +1094,15 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             if collection is None or collection.get("status") != _COLLECTION_ACTIVE:
                 raise RuntimeError(f"Collection {collection_name!r} became unavailable during ingestion")
 
-            summary = self._generate_summary("\n".join(texts), file_name) if self.cfg.generate_summary else None
+            summary = (
+                summarize_document(
+                    "\n".join(texts),
+                    self._summary_llm,
+                    input_max_chars=_SUMMARY_MAX_CHARS,
+                )
+                if self.cfg.generate_summary
+                else None
+            )
             self._update_collection_timestamp(collection_name)
         except Exception as processing_error:  # noqa: BLE001
             try:
@@ -1211,19 +1222,6 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             self._delete_document_ids(client, ids)
         return len(ids)
 
-    def _generate_summary(self, text: str, file_name: str) -> str | None:
-        if self._summary_llm is None:
-            return None
-        snippet = text[:_SUMMARY_MAX_CHARS]
-        prompt = f"Summarise the following document ({file_name}) in one sentence (max 30 words):\n\n{snippet}"
-        try:
-            response = self._summary_llm.invoke(prompt)
-            summary = getattr(response, "content", None) or str(response)
-            return summary.strip() or None
-        except Exception:  # noqa: BLE001
-            logger.exception("Summary generation failed for %s", file_name)
-            return None
-
     def _update_job(self, job_id: str, **fields: Any) -> None:
         with self._jobs_lock:
             job = self._jobs.get(job_id)
@@ -1284,8 +1282,8 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         if snapshot and (collection := self._get_collection_manifest(snapshot.collection_name)):
             if collection.get("status") == _COLLECTION_ACTIVE:
                 self._write_file_manifest(snapshot, summary=summary)
-                if snapshot.status == FileStatus.SUCCESS and summary:
-                    register_summary(snapshot.collection_name, snapshot.file_name, summary)
+                if snapshot.status == FileStatus.SUCCESS:
+                    register_summary(snapshot.collection_name, snapshot.file_name, summary or _DEFAULT_SUMMARY)
 
     @staticmethod
     def _cleanup_paths(paths: list[str]) -> None:
@@ -1397,8 +1395,7 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         with self._jobs_lock:
             self._deleted_collections.add(name)
             self._files = {file_id: info for file_id, info in self._files.items() if info.collection_name != name}
-        if self.cfg.generate_summary:
-            clear_collection_summaries(name)
+        clear_collection_summaries(name)
         return True
 
     def list_collections(self) -> list[CollectionInfo]:
@@ -1479,17 +1476,17 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             stable_reads=_CONSISTENCY_STABLE_READS,
         )
 
-        if self.cfg.generate_summary:
-            remaining = [
-                item
-                for item in self.list_files(collection_name)
-                if item.file_name == info.file_name and item.status == FileStatus.SUCCESS
-            ]
-            newest = max(remaining, key=lambda item: item.ingested_at or datetime.min.replace(tzinfo=UTC), default=None)
-            if newest and (summary := newest.metadata.get("summary")):
-                register_summary(collection_name, info.file_name, str(summary))
-            else:
-                unregister_summary(collection_name, info.file_name)
+        remaining = [
+            item
+            for item in self.list_files(collection_name)
+            if item.file_name == info.file_name and item.status == FileStatus.SUCCESS
+        ]
+        newest = max(remaining, key=lambda item: item.ingested_at or datetime.min.replace(tzinfo=UTC), default=None)
+        if newest:
+            summary = newest.metadata.get("summary", _DEFAULT_SUMMARY)
+            register_summary(collection_name, info.file_name, str(summary))
+        else:
+            unregister_summary(collection_name, info.file_name)
         self._update_collection_timestamp(collection_name)
         with self._jobs_lock:
             self._deleted_files.add((collection_name, file_id))

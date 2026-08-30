@@ -51,6 +51,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from aiq_agent.knowledge import register_summary
+from aiq_agent.knowledge import unregister_summary
 from aiq_agent.knowledge.base import BaseIngestor
 from aiq_agent.knowledge.base import BaseRetriever
 from aiq_agent.knowledge.base import TTLCleanupMixin
@@ -65,6 +67,8 @@ from aiq_agent.knowledge.schema import FileStatus
 from aiq_agent.knowledge.schema import IngestionJobStatus
 from aiq_agent.knowledge.schema import JobState
 from aiq_agent.knowledge.schema import RetrievalResult
+
+from ..utils import summarize_document
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +117,7 @@ TTL_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("AIQ_TTL_CLEANUP_INTERVAL_SECO
 
 # Document summarization settings
 SUMMARY_MAX_INPUT_CHARS = 4000  # ~1000 tokens input
+_DEFAULT_SUMMARY = "No summary available"
 
 
 def _get_nvidia_api_key() -> str:
@@ -409,43 +414,6 @@ def _caption_image_with_vlm(
         extract_charts=is_chart,
     )
     return caption
-
-
-# =============================================================================
-# Document Summarization
-# =============================================================================
-
-
-def _generate_document_summary(text_content: str, file_name: str, llm=None) -> str | None:
-    """
-    Generate one-sentence summary from document text.
-
-    Args:
-        text_content: Combined first + last chunk text.
-        file_name: Filename for context.
-        llm: LangChain LLM object. Required - no default fallback.
-
-    Returns:
-        One-sentence summary or None if no LLM provided or generation failed.
-    """
-    if llm is None:
-        # No fallback LLM - summary_model must be configured
-        return None
-
-    # Truncate if too long
-    text = text_content[:SUMMARY_MAX_INPUT_CHARS]
-    prompt = f"Summarize in ONE sentence:\n\n{text}"
-
-    try:
-        response = llm.invoke(prompt)
-        # Handle different response types (str or AIMessage)
-        content = response.content if hasattr(response, "content") else str(response)
-        summary = content.strip()
-        logger.info("[SUMMARY] Generated (%d chars)", len(summary))
-        return summary
-    except Exception as e:
-        logger.warning(f"Summary via LLM failed for {file_name}: {e}")
-        return None
 
 
 # =============================================================================
@@ -1101,8 +1069,6 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                             self._files.pop(tid, None)
                     logger.info(f"Removed {len(tracking_ids_to_remove)} tracking entries for file {file_name}")
 
-                    from aiq_agent.knowledge import unregister_summary
-
                     unregister_summary(collection_name, file_name)
                     return True
                 results = {"ids": matching_ids}
@@ -1117,8 +1083,6 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         self._files.pop(tid, None)
 
             # Remove from centralized summary registry
-            from aiq_agent.knowledge import unregister_summary
-
             unregister_summary(collection_name, file_name)
 
             return True
@@ -1390,7 +1354,10 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         combined = f"{first}\n...\n{last}" if last else first
                         executor = ThreadPoolExecutor(max_workers=1)
                         summary_future = executor.submit(
-                            _generate_document_summary, combined, file_name, self.summary_llm
+                            summarize_document,
+                            combined,
+                            self.summary_llm,
+                            input_max_chars=SUMMARY_MAX_INPUT_CHARS,
                         )
 
                     # 2. Extract tables (PDF only)
@@ -1504,13 +1471,10 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         )
                     else:
                         self._update_file_status(job, i, FileStatus.SUCCESS, chunks_created=chunks_created)
-                    # Store summary in FileInfo and centralized registry
-                    if summary:
                         # Register in centralized summary registry (backend-agnostic)
-                        from aiq_agent.knowledge import register_summary
-
-                        register_summary(collection_name, file_name, summary)
-
+                        register_summary(collection_name, file_name, summary or _DEFAULT_SUMMARY)
+                    # Store summary in FileInfo
+                    if summary:
                         # Also store in local FileInfo for backwards compatibility
                         file_id = config.get("file_id")
                         if file_id and file_id in self._files:
@@ -1592,7 +1556,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
         """Generate summary using NVIDIA NIM if enabled."""
         if not self.generate_summary_enabled:
             return None
-        return _generate_document_summary(text_content, file_name, self.summary_llm)
+        return summarize_document(text_content, self.summary_llm, input_max_chars=SUMMARY_MAX_INPUT_CHARS)
 
     async def health_check(self) -> bool:
         """In-process ingestor - always healthy if code is running."""

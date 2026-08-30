@@ -37,6 +37,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from aiq_agent.knowledge import register_summary
+from aiq_agent.knowledge import unregister_summary
 from aiq_agent.knowledge.base import BaseIngestor
 from aiq_agent.knowledge.base import BaseRetriever
 from aiq_agent.knowledge.base import TTLCleanupMixin
@@ -51,6 +53,8 @@ from aiq_agent.knowledge.schema import FileStatus
 from aiq_agent.knowledge.schema import IngestionJobStatus
 from aiq_agent.knowledge.schema import JobState
 from aiq_agent.knowledge.schema import RetrievalResult
+
+from ..utils import summarize_document
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +101,8 @@ SUMMARY_MAX_INPUT_CHARS = 4000
 DEFAULT_BULK_BATCH_SIZE = 100
 DEFAULT_EMBEDDING_BATCH_SIZE = 16
 SUPPORTED_TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log"}
+
+_DEFAULT_SUMMARY = "No summary available"
 
 # Adapter-owned `_meta` fields that caller-supplied collection metadata must never overwrite.
 # Overwriting `backend` hides the index from list_collections(); overwriting `collection_name`
@@ -158,28 +164,6 @@ def _parse_timestamp(value: Any) -> datetime | None:
         except ValueError:
             return None
     return None
-
-
-def _generate_document_summary(text_content: str, file_name: str, llm=None) -> str | None:
-    """Generate a one-sentence document summary using the configured LangChain LLM."""
-    if llm is None or not text_content.strip():
-        return None
-
-    prompt = (
-        "Summarize this uploaded document in one concise sentence for a research assistant. "
-        "Focus on the document's topic and likely usefulness.\n\n"
-        f"Document: {file_name}\n\n"
-        f"Content excerpt:\n{text_content[:SUMMARY_MAX_INPUT_CHARS]}"
-    )
-
-    try:
-        response = llm.invoke(prompt)
-        summary = getattr(response, "content", response)
-        summary_text = str(summary).strip()
-        return summary_text[:500] if summary_text else None
-    except Exception as e:
-        logger.warning("Summary generation failed for %s: %s", file_name, e)
-        return None
 
 
 def _read_text_file(file_path: Path) -> list[tuple[str, int | None, dict[str, Any]]]:
@@ -885,14 +869,13 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                     chunks_created=int(item.get("chunks_created", 0)),
                     error=item.get("error_message"),
                 )
-                summary = item.get("summary")
-                if summary:
-                    from aiq_agent.knowledge import register_summary
-
-                    register_summary(job.collection_name, detail.file_name, summary)
-                    tracked = self._files.get(detail.file_id)
-                    if tracked:
-                        tracked.metadata["summary"] = summary
+                if status == FileStatus.SUCCESS:
+                    summary = item.get("summary")
+                    register_summary(job.collection_name, detail.file_name, summary or _DEFAULT_SUMMARY)
+                    if summary:
+                        tracked = self._files.get(detail.file_id)
+                        if tracked:
+                            tracked.metadata["summary"] = summary
 
             failed_count = sum(1 for detail in job.file_details if detail.status == FileStatus.FAILED)
             job.processed_files = job.total_files
@@ -1086,8 +1069,6 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                         elif tracked_id == file_id:
                             self._files.pop(tracked_id, None)
 
-                from aiq_agent.knowledge import unregister_summary
-
                 unregister_summary(collection_name, resolved_name)
                 self._update_collection_timestamp(collection_name)
                 return True
@@ -1260,7 +1241,12 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         """Generate a one-sentence document summary if the feature is enabled."""
         if not self.generate_summary_enabled:
             return None
-        return _generate_document_summary(text_content, file_name, self.summary_llm)
+        summary = summarize_document(
+            text_content,
+            self.summary_llm,
+            input_max_chars=SUMMARY_MAX_INPUT_CHARS,
+        )
+        return summary[:500] if summary else None
 
     async def health_check(self) -> bool:
         """Return True if the OpenSearch cluster is reachable."""
@@ -1313,15 +1299,14 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                     total_chunks += chunks_created
                     self._mark_file(job, i, FileStatus.SUCCESS, chunks_created=chunks_created)
 
+                    summary = None
                     if self.generate_summary_enabled:
                         summary = self.generate_summary(summary_text, file_name)
                         if summary:
-                            from aiq_agent.knowledge import register_summary
-
-                            register_summary(collection_name, file_name, summary)
                             with self._lock:
                                 if file_id in self._files:
                                     self._files[file_id].metadata["summary"] = summary
+                    register_summary(collection_name, file_name, summary or _DEFAULT_SUMMARY)
 
                 except Exception as e:
                     logger.exception("OpenSearch ingestion failed for %s", file_path)

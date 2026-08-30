@@ -63,6 +63,8 @@ import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from aiq_agent.knowledge import register_summary
+from aiq_agent.knowledge import unregister_summary
 from aiq_agent.knowledge.base import BaseIngestor
 from aiq_agent.knowledge.base import BaseRetriever
 from aiq_agent.knowledge.base import TTLCleanupMixin
@@ -77,6 +79,8 @@ from aiq_agent.knowledge.schema import FileStatus
 from aiq_agent.knowledge.schema import IngestionJobStatus
 from aiq_agent.knowledge.schema import JobState
 from aiq_agent.knowledge.schema import RetrievalResult
+
+from ..utils import summarize_document
 
 # Suppress InsecureRequestWarning when verify_ssl=False
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -120,6 +124,8 @@ JOB_RETENTION_SECONDS = 3600  # 1 hour
 SUMMARY_MAX_CHARS = 4000
 SUMMARY_MAX_PAGES = 2
 SUMMARIZABLE_EXTENSIONS = {".pdf", ".docx", ".pptx", ".txt", ".md"}
+
+_DEFAULT_SUMMARY = "No summary available"
 
 
 def _create_session(timeout: int = DEFAULT_TIMEOUT, verify_ssl: bool = True) -> requests.Session:
@@ -234,22 +240,16 @@ def _generate_file_summary(file_path: str, llm=None) -> str | None:
     if llm is None:
         return None
 
-    if Path(file_path).suffix.lower() not in SUMMARIZABLE_EXTENSIONS:
+    filepath = Path(file_path)
+    if filepath.suffix.lower() not in SUMMARIZABLE_EXTENSIONS:
         return None
 
     text = _extract_text(file_path)
     if not text:
         return None
 
-    prompt = f"Summarize in ONE sentence:\n\n{text}"
-
-    try:
-        response = llm.invoke(prompt)
-        content = response.content if hasattr(response, "content") else str(response)
-        return content.strip()
-    except Exception as e:
-        logger.warning("Summary generation via LLM failed: %s", e)
-        return None
+    # Foundational RAG did not provide a file name, so we exclude it here
+    return summarize_document(text, llm, input_max_chars=SUMMARY_MAX_CHARS)
 
 
 @register_retriever("foundational_rag")
@@ -784,7 +784,7 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
         task_ids = []
 
         # Track summary futures for parallel generation
-        summary_futures: dict[int, tuple[str, Any]] = {}  # index -> (file_name, future)
+        summary_futures: list[tuple[str, Any]] = []
         executor = None
         if self.generate_summary:
             executor = ThreadPoolExecutor(max_workers=min(len(file_paths), 4))
@@ -799,10 +799,12 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
             job.file_details[i].status = FileStatus.INGESTING
 
             # Start client-side summary generation in parallel (if enabled)
-            if self.generate_summary and file_path_obj.suffix.lower() in SUMMARIZABLE_EXTENSIONS:
-                logger.info("Starting client-side summary generation")
-                future = executor.submit(_generate_file_summary, file_path, self.summary_llm)
-                summary_futures[i] = (file_name, future)
+            future = None
+            if file_path_obj.suffix.lower() in SUMMARIZABLE_EXTENSIONS:
+                if self.generate_summary:
+                    logger.info("Starting client-side summary generation")
+                    future = executor.submit(_generate_file_summary, file_path, self.summary_llm)
+            summary_futures.append((file_name, future))
 
             # Open file handle for batch upload
             try:
@@ -860,18 +862,17 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
             for fh in file_handles:
                 fh.close()
 
-        # Collect summaries from parallel generation and register them
-        if summary_futures:
-            from aiq_agent.knowledge import register_summary
-
-            for idx, (file_name, future) in summary_futures.items():
-                try:
-                    summary = future.result(timeout=30)
-                    if summary:
-                        register_summary(collection_name, file_name, summary)
-                        logger.info(f"  Summary generated ({len(summary)} chars)")
-                except Exception as e:
-                    logger.debug(f"Summary generation failed for {file_name}: {e}")
+        # Collect summaries from parallel generation if enabled and register them
+        # otherwise use the default summary
+        # TODO: The summary is registered BEFORE the file ingestion is checked. This can result in
+        #       a state where the summary is registered but the file is either unavailable or failed.
+        for file_name, future in summary_futures:
+            try:
+                summary = future.result(timeout=30) if future else _DEFAULT_SUMMARY
+                register_summary(collection_name, file_name, summary)
+                logger.info(f"  Summary generated ({len(summary)} chars)")
+            except Exception as e:
+                logger.debug(f"Summary generation failed for {file_name}: {e}")
 
         # Clean up executor
         if executor:
@@ -1359,24 +1360,20 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
             logger.error(f"Failed to upload file {file_path}: {e}")
 
         # Wait for client-side summary (non-blocking during upload)
-        if summary_future:
-            try:
-                summary = summary_future.result(timeout=15)
-                file_info.metadata["summary"] = summary
+        try:
+            summary = summary_future.result(timeout=15) if summary_future else None
+            file_info.metadata["summary"] = summary
 
-                # Register in centralized summary registry (backend-agnostic)
-                if summary:
-                    from aiq_agent.knowledge import register_summary
+            # Register in centralized summary registry (backend-agnostic)
+            register_summary(collection_name, file_info.file_name, summary or _DEFAULT_SUMMARY)
+            logger.info(f"  Summary generated ({len(summary or _DEFAULT_SUMMARY)} chars)")
 
-                    register_summary(collection_name, file_info.file_name, summary)
-                    logger.info(f"  Summary generated ({len(summary)} chars)")
-
-            except TimeoutError:
-                logger.warning("Summary generation timed out for %s", file_path_obj.name)
-                file_info.metadata["summary"] = None
-            except Exception as e:
-                logger.warning("Summary generation failed for %s: %s", file_path_obj.name, e)
-                file_info.metadata["summary"] = None
+        except TimeoutError:
+            logger.warning("Summary generation timed out for %s", file_path_obj.name)
+            file_info.metadata["summary"] = None
+        except Exception as e:
+            logger.warning("Summary generation failed for %s: %s", file_path_obj.name, e)
+            file_info.metadata["summary"] = None
 
         # Clean up executor
         if executor:
@@ -1413,8 +1410,6 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
             # If the file is no longer in the list, it was deleted
             if file_id not in remaining_names:
                 # Remove from centralized summary registry
-                from aiq_agent.knowledge import unregister_summary
-
                 unregister_summary(collection_name, file_id)
 
                 logger.info(f"Deleted file {file_id} from collection {collection_name}")
@@ -1455,7 +1450,6 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
 
             # Trust FRAG's 200 response as confirmation of successful delete
             # Remove from centralized summary registry
-            from aiq_agent.knowledge import unregister_summary
 
             for file_id in file_ids:
                 unregister_summary(collection_name, file_id)
