@@ -132,7 +132,11 @@ class StructuredResponseTextFallbackMiddleware(AgentMiddleware):
         if not isinstance(message, AIMessage) or message.tool_calls or not isinstance(message.content, str):
             return response
         try:
-            structured = self.schema.model_validate_json(message.content)
+            payload = json.loads(message.content)
+        except (TypeError, json.JSONDecodeError):
+            return response
+        try:
+            structured = self.schema.model_validate(payload)
         except ValidationError:
             return response
         logger.info("Recovered %s from schema-valid JSON message content", self.schema.__name__)

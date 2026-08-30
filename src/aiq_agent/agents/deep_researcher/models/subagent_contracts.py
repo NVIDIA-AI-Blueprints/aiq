@@ -83,6 +83,10 @@ class Constraint(_StrictContract):
     )
     constraint: str = Field(description="Specific, actionable constraint text.")
     rationale: str = Field(description="Why this constraint exists.")
+    verification: str | None = Field(
+        default=None,
+        description="Optional concrete check the writer can use to verify this constraint.",
+    )
 
 
 class SourceRecommendation(_StrictContract):
