@@ -116,6 +116,7 @@ echo ""
 echo "Installing data sources..."
 "${UV_BIN}" pip install -e ./sources/gsf
 "${UV_BIN}" pip install -e ./sources/tavily_web_search
+"${UV_BIN}" pip install -e ./sources/tavily_web_fetch
 "${UV_BIN}" pip install -e ./sources/exa_web_search
 "${UV_BIN}" pip install -e ./sources/nimble_web_search
 "${UV_BIN}" pip install -e ./sources/you_com

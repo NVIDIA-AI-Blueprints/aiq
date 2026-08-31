@@ -335,6 +335,34 @@ Follow the [Linux production acceptance](./openshell.md#linux-production-accepta
 and [policy/config pairing](./openshell.md#policy-and-ai-q-config-pairing) contracts;
 do not infer production readiness from a macOS best-effort demo.
 
+### Untrusted Web Content
+
+No shipped configuration enables the [Tavily web fetch](../customization/configuration-reference.md#tavily_web_fetch)
+tool; enabling it is an explicit operator action. When enabled, it returns full page text from a
+model-selected URL into the model context. Search tools return provider-reranked excerpts; this
+tool returns the page, so it carries materially more untrusted third-party text.
+
+Treat that content as data, not instructions. It is an indirect prompt injection surface, and
+injected text does not have to be visible to a human reader.
+
+AI-Q does not make the outbound request. Extraction is performed by the configured provider, so
+URL and network policy are inherited from that provider rather than enforced by AI-Q. AI-Q
+validates the URL scheme and network location only; there is no domain allowlist.
+
+The tool is read-only and returns text, so exposure depends on what else the same agent can
+reach. Enabling it alongside private or sensitive data sources raises the risk that a successful
+injection is used to exfiltrate that data. Scope agent tool sets to least privilege, attach
+[Guardrails](../customization/guardrails.md) to screen retrieved content, and review the full
+security model in `sources/tavily_web_fetch/README.md` before enabling it.
+
+Fetched URLs and page content are also retained by Relay observability by default, so they reach
+the ATOF trace file and any configured exporter. Treat a URL the model chooses as data that will be
+stored: do not route signed download URLs or credential-bearing query strings through this tool,
+and audit the retention and access controls of every telemetry destination. Removing these payloads
+from a trace requires the per-request `x-aiq-telemetry-redact: true` header, which depends on
+`redaction.enabled` staying `true`; `enable_full_payloads: false` does not cover tool payloads. See
+[Observability with NeMo Relay](./observability.md).
+
 ## Monitoring
 
 ### Liveness and Readiness Endpoints

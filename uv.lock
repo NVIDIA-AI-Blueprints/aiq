@@ -25,6 +25,7 @@ members = [
     "knowledge-layer",
     "nimble-web-search",
     "polymarket-prediction-market",
+    "tavily-web-fetch",
     "tavily-web-search",
     "you-com",
 ]
@@ -38,7 +39,7 @@ overrides = [
     { name = "lxml", specifier = ">=6.1.0,<7" },
     { name = "mako", specifier = ">=1.3.12,<2" },
     { name = "mcp", specifier = ">=1.28.1,<2" },
-    { name = "nltk", specifier = ">=3.10.0,<4" },
+    { name = "nltk", specifier = ">=3.10.2,<4" },
     { name = "pillow", specifier = ">=12.3.0,<13" },
     { name = "pyasn1", specifier = ">=0.6.4,<0.7" },
     { name = "pygments", specifier = ">=2.20.0,<3" },
@@ -286,6 +287,7 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-env" },
     { name = "ruff" },
+    { name = "tavily-web-fetch" },
     { name = "tavily-web-search" },
     { name = "yapf" },
     { name = "you-com" },
@@ -363,6 +365,7 @@ dev = [
     { name = "pytest-cov", specifier = ">=4.1.0" },
     { name = "pytest-env", specifier = ">=1.1.0" },
     { name = "ruff", specifier = "~=0.15.1" },
+    { name = "tavily-web-fetch", editable = "sources/tavily_web_fetch" },
     { name = "tavily-web-search", editable = "sources/tavily_web_search" },
     { name = "yapf", specifier = ">=0.40.0" },
     { name = "you-com", editable = "sources/you_com" },
@@ -4193,7 +4196,7 @@ requires-dist = [
 
 [[package]]
 name = "nltk"
-version = "3.10.0"
+version = "3.10.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -4202,9 +4205,9 @@ dependencies = [
     { name = "regex" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/96/02/df4f105b28a7c16b0e41423bc09cf0f1b8a305df4ef0b10ca74a2e4c648c/nltk-3.10.0.tar.gz", hash = "sha256:4fbac1d98203cbcd1b5d94a2877fb822300072d80604a5e7fae49d2c5f84e8c1", size = 3089244, upload-time = "2026-07-08T02:39:13.562Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e0/e6/fe51d2bb1a3b446f59c5c8165999a9fee208bc346af90a7cbf7657bc0d75/nltk-3.10.3.tar.gz", hash = "sha256:bb9327a461c3811c2fa4900e03840401f2126adfb30c0072827c433bd2444ea4", size = 5137152, upload-time = "2026-08-12T23:46:37.258Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6e/89/a0b0f35e2820d6a99d75ea1c11977ee6d5c9e6658eceb45b0c7620881faa/nltk-3.10.0-py3-none-any.whl", hash = "sha256:54ff84d4916d3ef127e8953bee0023f6a6b320b75d634a19e06ef056d3d244bf", size = 1716144, upload-time = "2026-07-08T02:39:09.753Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/6d/ebd2af4640b12168fdf0cb74b6118df2f32a2f62ec7e0c06fbfd80706639/nltk-3.10.3-py3-none-any.whl", hash = "sha256:ff9598a8e20518ee0d557745890cc4435b9578489e2dcbc69c4f81fa060caf7c", size = 1798643, upload-time = "2026-08-12T23:44:13.478Z" },
 ]
 
 [[package]]
@@ -6949,6 +6952,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/46/58/8c37dea7bbf769b20d58e7ace7e5edfe65b849442b00ffcdd56be88697c6/tabulate-0.10.0.tar.gz", hash = "sha256:e2cfde8f79420f6deeffdeda9aaec3b6bc5abce947655d17ac662b126e48a60d", size = 91754, upload-time = "2026-03-04T18:55:34.402Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/99/55/db07de81b5c630da5cbf5c7df646580ca26dfaefa593667fc6f2fe016d2e/tabulate-0.10.0-py3-none-any.whl", hash = "sha256:f0b0622e567335c8fabaaa659f1b33bcb6ddfe2e496071b743aa113f8774f2d3", size = 39814, upload-time = "2026-03-04T18:55:31.284Z" },
+]
+
+[[package]]
+name = "tavily-web-fetch"
+version = "1.0.0"
+source = { editable = "sources/tavily_web_fetch" }
+dependencies = [
+    { name = "langchain-tavily" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "langchain-tavily", specifier = ">=0.2.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
 [[package]]

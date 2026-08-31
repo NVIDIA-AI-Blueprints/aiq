@@ -76,11 +76,12 @@ cleanly requires a future minimal `aiq-agent` distribution or optional-dependenc
 refactor; uninstalling it after resolution would make package metadata
 inaccurate.
 
-The MCP project requires `nltk>=3.10.0` so its production lock includes NLTK's
-path-security fixes. NLTK 3.10 adds `defusedxml`; the MCP project constrains
-that dependency to the stable 0.7 release line because its prerelease policy
-would otherwise select a 0.8 release candidate. NLTK no longer requires an
-audit exception.
+The MCP project requires `nltk>=3.10.2` so its production lock includes NLTK's
+path-security fixes, including the `IPIPANCorpusReader` symlink bypass of
+`nltk.pathsec` fixed in 3.10.2 (`PYSEC-2026-3726` / `CVE-2026-62383`). NLTK 3.10
+adds `defusedxml`; the MCP project constrains that dependency to the stable 0.7
+release line because its prerelease policy would otherwise select a 0.8 release
+candidate. NLTK no longer requires an audit exception.
 
 The audit also reports archived project status for transitive packages. An
 archived status is tracked as maintenance risk but is not itself a known

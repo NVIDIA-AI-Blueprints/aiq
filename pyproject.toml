@@ -227,6 +227,7 @@ dev = [
     "aiq-gsf",
     "google-scholar-paper-search",
     "tavily-web-search",
+    "tavily-web-fetch",
     "exa-web-search",
     "nimble-web-search",
     "you-com",
@@ -253,7 +254,7 @@ override-dependencies = [
     "banks>=2.4.2,<3",
     "lxml>=6.1.0,<7",
     "defusedxml>=0.7.1,<0.8",
-    "nltk>=3.10.0,<4",
+    "nltk>=3.10.2,<4",
     "pyasn1>=0.6.4,<0.7",
     "aiohttp>=3.14.3,<4",
 ]
@@ -277,6 +278,7 @@ aiq-agent = { workspace = true }
 aiq-gsf = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
+tavily-web-fetch = { workspace = true }
 exa-web-search = { workspace = true }
 nimble-web-search = { workspace = true }
 you-com = { workspace = true }
