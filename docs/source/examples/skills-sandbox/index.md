@@ -124,8 +124,8 @@ job-isolated.
 ### Use the third-party Sprites provider
 
 [Fly.io's Sprites provider](https://github.com/superfly/aiq-sandbox-sprites) is an external package that implements
-AI-Q's sandbox-provider entry point. Install it into the same environment as AI-Q and provide a restricted Sprites
-token to the host process:
+AI-Q's sandbox-provider entry point. It requires AI-Q 2.2, does not support AI-Q 2.1, and has been tested with AI-Q
+v2.2.1. Install it into the same environment as AI-Q and provide a restricted Sprites token to the host process:
 
 ```bash
 .venv/bin/python -m pip install aiq-sandbox-sprites
