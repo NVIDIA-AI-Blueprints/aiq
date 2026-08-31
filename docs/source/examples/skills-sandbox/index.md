@@ -12,8 +12,7 @@ Skills let a research agent discover task-specific instructions only when they a
 skill definitions read-only from the host. A skill can teach the agent a repeatable workflow, such as extracting numeric
 facts, normalizing a table, running calculations, and producing reusable text artifacts. When a skill invokes
 `execute`, the generated code runs outside the AI-Q process in one provider sandbox per deep-research job. Modal and
-OpenShell implement this job-scoped contract. Third-party packages can implement the same contract through AI-Q's
-`aiq.sandbox_providers` entry point.
+OpenShell implement this job-scoped contract.
 
 For more background, refer to the LangChain DeepAgents docs:
 
