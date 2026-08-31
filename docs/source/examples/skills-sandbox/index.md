@@ -12,7 +12,8 @@ Skills let a research agent discover task-specific instructions only when they a
 skill definitions read-only from the host. A skill can teach the agent a repeatable workflow, such as extracting numeric
 facts, normalizing a table, running calculations, and producing reusable text artifacts. When a skill invokes
 `execute`, the generated code runs outside the AI-Q process in one provider sandbox per deep-research job. Modal and
-OpenShell implement this job-scoped contract.
+OpenShell implement this job-scoped contract. Third-party packages can implement the same contract through AI-Q's
+`aiq.sandbox_providers` entry point.
 
 For more background, refer to the LangChain DeepAgents docs:
 
@@ -120,6 +121,46 @@ sandbox per job, verifies the effective policy and revision before use, and
 deletes the sandbox at terminal cleanup. Attaching to an existing shared
 sandbox is available only through explicit debug settings and is not
 job-isolated.
+
+### Use the third-party Sprites provider
+
+[Fly.io's Sprites provider](https://github.com/superfly/aiq-sandbox-sprites) is an external package that implements
+AI-Q's sandbox-provider entry point. Install it into the same environment as AI-Q and provide a restricted Sprites
+token to the host process:
+
+```bash
+.venv/bin/python -m pip install aiq-sandbox-sprites
+export SPRITE_TOKEN="..."  # pragma: allowlist secret
+```
+
+Select the external provider with the standard sandbox configuration surface:
+
+```yaml
+functions:
+  deep_research_sandbox:
+    _type: deep_research_sandbox
+    provider: sprites
+    workdir: /workspace
+    packages:
+      - matplotlib
+      - numpy
+      - pandas
+      - pillow
+      - tabulate
+    network: blocked
+    timeout: 1200
+    idle_timeout: 1800
+    artifact_capture:
+      enabled: true
+      max_file_bytes: 50000000
+      allow_extensions: [.png, .jpg, .jpeg, .webp, .csv, .json, .md, .ipynb, .pdf]
+```
+
+The host-side provider creates one ownership-labeled Sprite per job, installs the trusted package list before applying
+the requested network policy, and removes the Sprite during normal or interrupted AI-Q cleanup. The token remains in
+the host process and is not copied into the Sprite. CPU and memory limits are not currently supported through this
+provider, and production operators still need an external orphan reaper for complete worker-host loss. Refer to the
+provider repository for its supported AI-Q versions, environment-specific settings, tests, and security details.
 
 ## Run Synchronously with `nat run` (Non-Persistent)
 
