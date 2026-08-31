@@ -51,7 +51,8 @@ export NVIDIA_API_KEY="nvapi-..."              # pragma: allowlist secret
 export TAVILY_API_KEY="tvly-..."               # pragma: allowlist secret
 ```
 
-For sandbox execution, create a Modal account and configure Modal credentials. Modal uses a token ID and token secret:
+When using `provider: modal`, create a Modal account and configure Modal credentials. Modal uses a token ID and token
+secret:
 
 ```bash
 export MODAL_TOKEN_ID="ak-..."                 # pragma: allowlist secret
@@ -65,6 +66,7 @@ modal token set --token-id "$MODAL_TOKEN_ID" --token-secret "$MODAL_TOKEN_SECRET
 ```
 
 Refer to Modal's token configuration docs for details: [modal.config](https://modal.com/docs/reference/modal.config).
+Other sandbox providers use their own credentials; `provider: sprites` requires `SPRITE_TOKEN` as described below.
 
 ## Configuration
 
