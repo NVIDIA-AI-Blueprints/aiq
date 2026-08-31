@@ -11,7 +11,7 @@ import pytest
 from aiq_agent.agents.data_science.utils.analysis_runtime import begin_analysis_run
 from aiq_agent.agents.data_science.utils.analysis_runtime import end_analysis_run
 from aiq_agent.agents.data_science.utils.analysis_runtime import get_analysis_run
-from aiq_agent.agents.data_science.utils.analysis_runtime import register_gsf_result
+from aiq_agent.agents.data_science.utils.analysis_runtime import register_structured_result
 
 
 @pytest.mark.asyncio
@@ -21,7 +21,7 @@ async def test_manifest_write_failure_does_not_advertise_unusable_result(
     original_replace = Path.replace
 
     def _replace(path: Path, target: str | Path) -> Path:
-        if path.name == "gsf-results.tmp":
+        if path.name == "structured-results.tmp":
             raise OSError("manifest unavailable")
         return original_replace(path, target)
 
@@ -30,35 +30,39 @@ async def test_manifest_write_failure_does_not_advertise_unusable_result(
     state = get_analysis_run()
     assert state is not None
     try:
-        reference = register_gsf_result(
+        reference = register_structured_result(
+            provider="ontology",
+            tool_name="ontology__text_to_sql",
             question="Persist rows",
             database_name="example",
             payload={"rows": [{"value": 7}]},
         )
 
         assert reference is None
-        assert state.gsf_results == []
-        assert list(state.root.glob("gsf_*.json")) == []
+        assert state.structured_results == []
+        assert list(state.root.glob("structured_*.json")) == []
         assert not state.manifest_path.exists()
     finally:
         await end_analysis_run(token)
 
 
 @pytest.mark.asyncio
-async def test_non_finite_gsf_payload_does_not_create_analysis_reference() -> None:
+async def test_non_finite_payload_does_not_create_analysis_reference() -> None:
     token = begin_analysis_run()
     state = get_analysis_run()
     assert state is not None
     try:
-        reference = register_gsf_result(
+        reference = register_structured_result(
+            provider="ontology",
+            tool_name="ontology__text_to_sql",
             question="Non-finite value",
             database_name="example",
             payload={"rows": [{"value": float("nan")}]},
         )
 
         assert reference is None
-        assert state.gsf_results == []
-        assert list(state.root.glob("gsf_*.json")) == []
+        assert state.structured_results == []
+        assert list(state.root.glob("structured_*.json")) == []
     finally:
         await end_analysis_run(token)
 

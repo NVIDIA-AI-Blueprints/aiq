@@ -14,14 +14,17 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
+from aiq_agent.agents.chat_researcher.utils import _extract_query_context
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import get_all_tool_refs
+from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.ontology import OntologyProviderConfig
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -35,6 +38,8 @@ from nat.data_models.function import FunctionBaseConfig
 from .agent import DataScienceAgent
 from .models import DataScienceAgentState
 from .sandboxed_python import SandboxedPythonConfig
+from .utils.structured_data_guardrails import StructuredDataCallBudget
+from .utils.structured_data_guardrails import StructuredDataCallGuardMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -76,19 +81,26 @@ class DataScienceAgentConfig(FunctionBaseConfig, name="data_science_agent"):
         default="standard",
         description="Optional response contract; FDABench choice mode preserves labels when choices are present.",
     )
-    gsf_catalog_call_limit: int | None = Field(
+    ontology_provider: OntologyProviderConfig | None = Field(
+        default=None,
+        description=(
+            "Provider-neutral assignment of catalog, analytical, and predictive roles. "
+            "Referenced tools must also be loaded through tools or data_source_registry."
+        ),
+    )
+    structured_catalog_call_limit: int | None = Field(
         default=None,
         ge=1,
-        description="Optional request-local hard limit for actual GSF catalog calls.",
+        description="Optional request-local hard limit for ontology-provider catalog calls.",
     )
-    gsf_text_to_sql_call_limit: int | None = Field(
+    structured_text_to_sql_call_limit: int | None = Field(
         default=None,
         ge=1,
-        description="Optional request-local hard limit for actual GSF text-to-SQL calls.",
+        description="Optional request-local hard limit for ontology-provider text-to-SQL calls.",
     )
-    gsf_cache_repeated_calls: bool = Field(
+    structured_cache_repeated_calls: bool = Field(
         default=True,
-        description="Reuse exact repeated GSF calls within one request.",
+        description="Reuse exact repeated catalog and text-to-SQL calls within one request.",
     )
     python_call_limit: int | None = Field(
         default=None,
@@ -117,6 +129,44 @@ class DataScienceHybridAdapterConfig(FunctionBaseConfig, name="data_science_hybr
     agent: FunctionRef = Field(description="Configured data_science_agent function to invoke.")
 
 
+def _active_ontology_provider(
+    provider: OntologyProviderConfig | None,
+    tools: list[Any],
+) -> OntologyProviderConfig | None:
+    """Resolve configured provider roles against one request's filtered tools."""
+
+    available = {tool.name for tool in tools}
+    if provider is None:
+        return None
+
+    assigned = provider.tool_names & available
+    if not assigned:
+        return None
+    missing = sorted(provider.tool_names - available)
+    if missing:
+        raise ValueError(f"ontology provider references unavailable tools: {', '.join(missing)}")
+    return provider
+
+
+def _validate_ontology_provider_source_mapping(provider: OntologyProviderConfig | None) -> None:
+    """Require every configured ontology tool role to share one registry source."""
+
+    if provider is None:
+        return
+
+    source_by_tool = {tool_name: get_source_id_for_tool(tool_name) for tool_name in provider.tool_names}
+    unmapped = sorted(tool_name for tool_name, source_id in source_by_tool.items() if source_id is None)
+    if unmapped:
+        raise ValueError(
+            f"ontology provider tools must be mapped in data_source_registry; unmapped tools: {', '.join(unmapped)}"
+        )
+
+    source_ids = {source_id for source_id in source_by_tool.values() if source_id is not None}
+    if len(source_ids) != 1:
+        mappings = ", ".join(f"{tool_name} -> {source_by_tool[tool_name]}" for tool_name in sorted(source_by_tool))
+        raise ValueError(f"ontology provider tools must map to the same data source; mappings: {mappings}")
+
+
 @register_function(config_type=DataScienceAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
     """Resolve configured AI-Q tools and compose one contiguous ReAct loop."""
@@ -126,6 +176,7 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
         excluded = set(config.exclude_tools)
         tools = [tool for tool in tools if tool.name not in excluded]
 
+    _validate_ontology_provider_source_mapping(config.ontology_provider)
     validate_research_source_configuration(None, "data science", tools)
 
     llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
@@ -176,6 +227,19 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
                 )
 
             validate_research_source_configuration(state.data_sources, "data science", selected_tools)
+            active_provider = _active_ontology_provider(config.ontology_provider, selected_tools)
+            structured_guard = None
+            if active_provider is not None:
+                structured_guard = StructuredDataCallGuardMiddleware(
+                    provider=active_provider.provider,
+                    catalog_tools=active_provider.catalog_tool_names,
+                    text_to_sql_tools=active_provider.analytical_tool_names,
+                    budget=StructuredDataCallBudget(
+                        catalog_calls=config.structured_catalog_call_limit,
+                        text_to_sql_calls=config.structured_text_to_sql_call_limit,
+                        cache_repeated_calls=config.structured_cache_repeated_calls,
+                    ),
+                )
             active_agent = DataScienceAgent(
                 llm=llm,
                 tools=selected_tools,
@@ -183,9 +247,7 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
                 callbacks=callbacks,
                 interaction_mode=config.interaction_mode,
                 response_mode=config.response_mode,
-                gsf_catalog_call_limit=config.gsf_catalog_call_limit,
-                gsf_text_to_sql_call_limit=config.gsf_text_to_sql_call_limit,
-                gsf_cache_repeated_calls=config.gsf_cache_repeated_calls,
+                structured_guard=structured_guard,
                 python_call_limit=config.python_call_limit,
                 finalization_model_call_limit=config.finalization_model_call_limit,
             )
@@ -236,9 +298,16 @@ async def data_science_workflow(config: DataScienceWorkflowConfig, builder: Buil
     """Expose the DS Agent as a standard string-to-ChatResponse workflow."""
     agent_fn = await builder.get_function("data_science_agent")
 
-    async def _run(query: str) -> ChatResponse:
+    async def _run(query: object) -> ChatResponse:
+        request_context = _extract_query_context(query)
         try:
-            result = await agent_fn.ainvoke(DataScienceAgentState(messages=[HumanMessage(content=query)]))
+            result = await agent_fn.ainvoke(
+                DataScienceAgentState(
+                    messages=[HumanMessage(content=request_context.query_text)],
+                    data_sources=request_context.data_sources,
+                    database_name=request_context.database_name,
+                )
+            )
             content = str(result.messages[-1].content)
         except EmptySourceRegistryError as exc:
             content = exc.public_response

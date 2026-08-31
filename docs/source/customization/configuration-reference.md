@@ -536,9 +536,13 @@ functions:
     _type: data_science_agent
     llm: data_science_llm
     # tools omitted -> inherit every tool in data_source_registry
+    ontology_provider:
+      provider: gsf
+      catalog_tools: [gsf__catalog_search]
+      analytical_tools: [gsf__text_to_sql]
     response_mode: standard
-    gsf_catalog_call_limit: 2
-    gsf_text_to_sql_call_limit: 6
+    structured_catalog_call_limit: 2
+    structured_text_to_sql_call_limit: 6
     python_call_limit: 8
     finalization_model_call_limit: 18
     recursion_limit: 64
@@ -552,9 +556,10 @@ functions:
 | `exclude_tools` | `list[str]` | `[]` | Exact runtime tool names removed after inherited or explicit tools are resolved. |
 | `interaction_mode` | `interactive` or `headless` | `interactive` | In `headless` mode, never wait for clarification; resolve supported assumptions and perform one bounded synthesis retry if needed. |
 | `response_mode` | `standard` or `fdabench_choice` | `standard` | In `fdabench_choice` mode, preserve explicitly supplied option labels and emit an `Answer:` marker; non-choice requests retain normal report behavior. |
-| `gsf_catalog_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF catalog calls. Minimum `1`; exact cache hits do not count. |
-| `gsf_text_to_sql_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF text-to-SQL calls. Minimum `1`; exact cache hits do not count. |
-| `gsf_cache_repeated_calls` | `bool` | `true` | Reuse exact repeated GSF tool calls within one agent request. Cache state never crosses requests. |
+| `ontology_provider` | object or `None` | `None` | Assign one provider identifier, non-empty `catalog_tools` and `analytical_tools` lists, and optional `predictive_tools`. Every referenced tool must be enabled and mapped to the same `data_source_registry` source. |
+| `structured_catalog_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on ontology catalog calls. Minimum `1`; exact cache hits do not count. |
+| `structured_text_to_sql_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on ontology-provider text-to-SQL calls. Predictive execution is not included. Minimum `1`; exact cache hits do not count. |
+| `structured_cache_repeated_calls` | `bool` | `true` | Reuse exact repeated catalog and text-to-SQL calls within one agent request. Cache state never crosses requests. |
 | `python_call_limit` | `int` or `None` | `None` | Optional request-local call ceiling for stateless scientific Python execution. |
 | `finalization_model_call_limit` | `int` or `None` | derived | Model-call count at which tools are disabled and a no-tool synthesis turn is forced before recursion exhaustion. |
 | `recursion_limit` | `int` | `64` | Hard LangGraph step limit for one adaptive run. Minimum `4`. |
