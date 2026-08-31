@@ -313,6 +313,38 @@ class TestShallowResearcherAgent:
         assert "- [1] mcp_time__get_current_time" in agent.system_prompt
 
     @pytest.mark.asyncio
+    async def test_request_without_knowledge_tool_allows_web_or_academic_search(
+        self, mock_llm_provider, mock_llm, real_tool
+    ):
+        """A request with no knowledge/document tool still uses web search and keeps fallback rules."""
+        captured_prompts: list[str] = []
+
+        async def capture_messages(messages, *, config):
+            captured_prompts.append(str(messages[0].content))
+            if len(captured_prompts) == 1:
+                return AIMessage(
+                    content="",
+                    tool_calls=[{"name": real_tool.name, "args": {"query": "CUDA"}, "id": "web-1"}],
+                )
+            return AIMessage(content="CUDA is a parallel computing platform [1].")
+
+        mock_llm.ainvoke = AsyncMock(side_effect=capture_messages)
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+        )
+        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        prompt = captured_prompts[0]
+        assert "If no knowledge/document tool is listed, use web or academic tools for the request." in prompt
+        assert "After knowledge/document retrieval is empty, irrelevant, or fails" in prompt
+        assert "For mixed requests, use the knowledge/document tool for corpus claims" in prompt
+        assert "**web_search_tool**" in prompt
+        assert "knowledge_search" not in prompt
+        assert mock_llm.bind_tools.call_args_list[0] == call([real_tool])
+        assert result.messages[-1].content.startswith("CUDA is a parallel computing platform")
+
+    @pytest.mark.asyncio
     async def test_citation_repair_timeout_fails_closed(self, mock_llm_provider, mock_llm):
         """A stalled provider cannot extend a completed shallow run indefinitely."""
 
