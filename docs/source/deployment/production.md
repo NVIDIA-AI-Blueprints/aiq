@@ -355,6 +355,14 @@ injection is used to exfiltrate that data. Scope agent tool sets to least privil
 [Guardrails](../customization/guardrails.md) to screen retrieved content, and review the full
 security model in `sources/tavily_web_fetch/README.md` before enabling it.
 
+Fetched URLs and page content are also retained by Relay observability by default, so they reach
+the ATOF trace file and any configured exporter. Treat a URL the model chooses as data that will be
+stored: do not route signed download URLs or credential-bearing query strings through this tool,
+and audit the retention and access controls of every telemetry destination. Removing these payloads
+from a trace requires the per-request `x-aiq-telemetry-redact: true` header, which depends on
+`redaction.enabled` staying `true`; `enable_full_payloads: false` does not cover tool payloads. See
+[Observability with NeMo Relay](./observability.md).
+
 ## Monitoring
 
 ### Liveness and Readiness Endpoints

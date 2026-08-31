@@ -334,7 +334,15 @@ async def _extract(tool, urls: list[str], *, extract_depth: str, timeout_seconds
     try:
         # Do not forward query: local windowing must operate on the complete extraction so misses are recoverable.
         payload = {"urls": urls, "extract_depth": extract_depth}
-        response = await asyncio.wait_for(tool.ainvoke(payload), timeout=timeout_seconds)
+        # Run the provider adapter without user-facing callbacks. Left implicit, LangChain resolves
+        # the config from a contextvar the surrounding workflow set, so this nested call would
+        # report itself as a tool in its own right. AI-Q classifies a tool as URL-producing by
+        # substring on its name, and the adapter is called ``tavily_extract``, so its raw response
+        # -- whole pages, every hyperlink in them -- would be scraped into durable citation
+        # artifacts for pages the agent never asked for. The outer tool owns lifecycle reporting and
+        # decides its own citations from the pages it actually rendered; this call is an
+        # implementation detail underneath it and reports nothing.
+        response = await asyncio.wait_for(tool.ainvoke(payload, config={"callbacks": []}), timeout=timeout_seconds)
     except TimeoutError:
         return [], f"the extraction service did not respond within {timeout_seconds} seconds"
     except AttributeError:

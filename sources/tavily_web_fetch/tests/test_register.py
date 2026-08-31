@@ -106,13 +106,51 @@ class TestTavilyAdapter:
         assert out.startswith("Error:")
 
     async def test_timeout_returns_a_message_and_never_raises(self, fake_tavily):
-        async def _slow(_payload):
+        # **_ absorbs the callback config the tool passes to keep the adapter unobserved.
+        async def _slow(_payload, **_):
             await asyncio.sleep(5)
 
         fake_tavily.ainvoke.side_effect = _slow
         out = await _call(TavilyWebFetchToolConfig(timeout_seconds=1), fake_tavily, [URL_A])
         assert out.startswith("Error:")
         assert "did not respond" in out
+
+    async def test_failures_never_log_the_url_the_key_or_page_content(self, fake_tavily, caplog):
+        """Pin the half of the logging contract AI-Q itself enforces.
+
+        The README distinguishes this module's Python logger, which records only an exception
+        class name, from the surrounding observability stack, which retains full payloads by
+        default and is the operator's to configure. Only the first half is enforceable here, so
+        pin it: a future change that starts logging the URL to help debugging would silently
+        widen what a log file holds, and this is what would catch it.
+        """
+        secret = os.environ["TAVILY_API_KEY"]
+        fake_tavily.ainvoke.side_effect = RuntimeError(f"failed fetching {URL_A} with key {secret}")
+
+        with caplog.at_level("DEBUG"):
+            out = await _call(TavilyWebFetchToolConfig(), fake_tavily, [URL_A])
+
+        assert out.startswith("Error:")
+        logged = "\n".join(record.getMessage() for record in caplog.records)
+        # The exception message itself carries all three; only its class name may survive.
+        assert "RuntimeError" in logged
+        assert URL_A not in logged
+        assert secret not in logged
+        assert "failed fetching" not in logged
+
+    async def test_a_timeout_logs_nothing_that_identifies_the_request(self, fake_tavily, caplog):
+        """The timeout path returns a message built from the limit, not from the request."""
+
+        async def _slow(_payload, **_):
+            await asyncio.sleep(5)
+
+        fake_tavily.ainvoke.side_effect = _slow
+        with caplog.at_level("DEBUG"):
+            await _call(TavilyWebFetchToolConfig(timeout_seconds=1), fake_tavily, [URL_A])
+
+        logged = "\n".join(record.getMessage() for record in caplog.records)
+        assert URL_A not in logged
+        assert os.environ["TAVILY_API_KEY"] not in logged
 
     async def test_trailing_slash_differences_still_match_the_request(self, fake_tavily):
         fake_tavily.ainvoke.return_value = {"results": [extract_result(URL_A + "/")]}
@@ -296,7 +334,9 @@ class TestRegistration:
 
         self._isolate_parser(monkeypatch)
         shared_key = "fetch_url_tool"
-        fake_tavily.ainvoke.side_effect = lambda payload: {"results": [extract_result(url) for url in payload["urls"]]}
+        fake_tavily.ainvoke.side_effect = lambda payload, **_: {
+            "results": [extract_result(url) for url in payload["urls"]]
+        }
 
         async def fetch_in_run(run_id, url):
             # gather() runs each coroutine as its own task, so each gets its own copy of the

@@ -305,6 +305,24 @@ exporter. The default detectors cover common credentials and personal data.
 AI-Q can also request privacy-mode sanitization for supported `data` and
 `category_profile` payloads through request privacy context.
 
+Request privacy is activated per request, by sending the header
+`x-aiq-telemetry-redact: true`. AI-Q converts it into an `aiq.telemetry.redact`
+trace tag, which switches on sanitizers that drop LLM request and response
+payloads and replace tool payloads with `[REDACTED]` for the life of that
+request. Two consequences are easy to miss:
+
+- `redaction.request_privacy_attributes` only selects which scope attributes are
+  cleared once request privacy is already active. Editing that list does not
+  enable request-level redaction.
+- The sanitizers are registered only when `redaction.enabled` is `true`. Setting
+  `redaction.enabled: false` disables the header as well, and the request still
+  exports its payloads.
+
+`enable_full_payloads` governs the payloads Relay's own integrations capture. It
+does not cover values AI-Q passes to Relay as explicit scope inputs and outputs,
+which includes tool inputs and outputs, so disabling it is not a way to keep tool
+payloads out of a trace.
+
 Redaction reduces accidental disclosure; it is not a substitute for auditing
 the destination's access controls, retention, and data policy. Validate every
 configured exported attribute with synthetic sensitive values before enabling

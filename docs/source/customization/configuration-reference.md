@@ -213,6 +213,18 @@ functions:
 | `timeout_seconds` | `int` | `30` | Per-call extraction timeout in seconds. |
 | `api_key` | `str` | `None` | Tavily API key. Falls back to the `TAVILY_API_KEY` environment variable. |
 
+Name the function block so it does not contain `search`, `tavily`, `google`, or `bing`. AI-Q
+decides whether a tool produces citable URLs by testing the configured key for those substrings, so
+a key like `tavily_fetch` would make every outbound link inside a fetched page register as a source
+the agent never read. The example above uses `fetch_url_tool`.
+
+The requested URL and the content returned to the model are retained by
+[NeMo Relay observability](../deployment/observability.md) by default and exported wherever it is
+configured to export. Removing them from a trace requires the per-request
+`x-aiq-telemetry-redact: true` header; `enable_full_payloads: false` does not cover tool payloads.
+Do not point this tool at signed download URLs, query-string credentials, or other
+credential-bearing URLs; see the security model in `sources/tavily_web_fetch/README.md`.
+
 ### `exa_web_search`
 
 Web search powered by the [Exa API](https://exa.ai/) via `langchain-exa`.

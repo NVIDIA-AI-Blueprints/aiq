@@ -35,7 +35,9 @@ urls=["https://example.com/report.pdf"], query="table 2.2"
 
 Results contain one `<fetched_page>` section per URL. Of the sources this tool contributes, only successfully fetched
 pages enter AI-Q's citation registry; soft 404s, failures, skipped pages, and outbound links in page content are not
-registered as sources.
+registered as sources. This holds for the durable citation artifacts in the event stream as well as for the citation
+registry, and depends on the configuration key chosen for the tool -- see
+[Citation Scoping](#citation-scoping) below.
 
 Long lines are wrapped when a page is read, and a window always contains whole lines. The truncation note therefore
 reports exactly what was shown, and `start_line` reaches every character of the page.
@@ -111,15 +113,36 @@ No currently available mitigation eliminates this class of attack.
 Tool output labels retrieved content as untrusted, wraps each page in a `<fetched_page>` element
 with HTML-escaped attributes, and numbers every line. This follows the standard practice of
 segregating and identifying external content: it keeps a clear boundary between instructions and
-retrieved data, and gives the model explicit provenance. Of the sources this tool contributes, only
-pages it actually read can be cited. Each call records the pages it successfully read under the
-workflow run that made the call, and the citation parser serves that run's record rather than
-re-reading the result text -- so a tool name, a page reproducing this format, a concurrent
-workflow reusing the same configuration key, and a replay of another run's result are all unable
-to add a source. A call made outside a workflow run is not citable at all.
+retrieved data, and gives the model explicit provenance.
 
 **These are prompt-level and bookkeeping measures, not an enforcement boundary.** They raise the
 cost of an attack; they do not prevent one.
+
+### Citation Scoping
+
+Of the sources this tool contributes, only pages it actually read can be cited. Two independent
+pipelines can turn a URL into a source, and both are addressed.
+
+**The citation registry.** Each call records the pages it successfully read under the workflow run
+that made the call, and the citation parser serves that run's record rather than re-reading the
+result text -- so a tool name, a page reproducing this format, a concurrent workflow reusing the
+same configuration key, and a replay of another run's result are all unable to add a source. A
+call made outside a workflow run is not citable at all.
+
+**The event stream.** AI-Q's event callback separately watches LangChain tool runs and writes
+durable `citation_source` artifacts, which later seed follow-up jobs. It does not consult the
+registry or the run record: it decides a tool produces URLs by testing its *name* for the
+substrings `search`, `tavily`, `web_search`, `google`, and `bing`, then extracts every URL in the
+raw result. The extraction adapter underneath this tool is named `tavily_extract` and returns whole
+pages, so it is deliberately invoked without the surrounding run's callbacks and reports no tool
+lifecycle of its own. The outer tool owns lifecycle reporting and decides its own citations.
+
+**This depends on the configuration key you choose.** The key names the tool, and the substring
+test above is applied to it. Naming the function block something like `tavily_fetch` or
+`web_fetch_search` would make AI-Q treat the tool's own rendered output as search results and
+scrape every URL in a fetched page -- outbound links included -- back into `citation_source`
+artifacts. Use a key that contains none of those substrings; the documented example is
+`fetch_url_tool`.
 
 ### Before You Enable This Tool
 
@@ -155,12 +178,55 @@ The URLs an agent fetches, and the content returned for them, transit third-part
 Review the provider's published data retention, privacy, and model-training terms for your own
 account and contract; terms negotiated by anyone else do not apply to your deployment.
 
-### Secrets and Logging
+### Secrets, Logging, and Telemetry
 
 The API key is held as a `SecretStr` and read from `TAVILY_API_KEY` when not set in config. Without
 a key the tool registers a stub that returns an error string, so a missing secret degrades
-gracefully instead of crashing. Extraction failures log the exception class name only -- never the
-key, the URL, or page content.
+gracefully instead of crashing.
+
+**This module's Python logger** records the exception class name only on an extraction failure --
+never the key, the URL, or page content.
+
+**That is not the whole logging contract.** The requested URL and the content returned to the model
+leave this module through two channels this tool does not control. AI-Q's job event stream records
+the requested URL on the tool-start event and persists it for the job. NeMo Relay records more: its
+`enable_full_payloads` defaults to `true`, and ATOF export defaults to `enabled: true` with
+`mode: append`, so a trace retains both the complete requested URL and the entire content returned
+to the model. The `relay` block is attached to every workflow by default, so this applies even to a
+config that has no `relay` section. Assume the URL and the page text are stored, and are exported
+anywhere Relay is configured to export.
+
+**Do not let this tool receive credential-bearing URLs.** It accepts any `http(s)` URL the model
+produces, which can include signed download URLs, query-string credentials or tokens, internal
+document identifiers, and user-identifying paths. Relay's built-in detectors cover common
+credential and personal-data shapes; they are not guaranteed to recognize an arbitrary signed-URL
+token, and a redacted payload is not a guarantee that nothing sensitive survived.
+
+Two of the supported controls are deployment-level, in the workflow's `relay` block; the one that
+actually removes this data is per-request.
+
+| Control | Where | Effect on the URL and page content |
+| --- | --- | --- |
+| `observability.atof.enabled: false` | workflow `relay` block | No ATOF trace file is written, so nothing is retained locally. |
+| `observability.opentelemetry.enabled: false` (the default) | workflow `relay` block | Traces are not sent to an external collector. |
+| `x-aiq-telemetry-redact: true` | request header | Both are removed from the trace before export. |
+
+**Request privacy is activated by the request, not by configuration.** Send
+`x-aiq-telemetry-redact: true` with the request; AI-Q turns that header into a trace tag that
+switches Relay payload sanitization on for the life of the request. `redaction.request_privacy_attributes`
+only selects which scope attributes are cleared once it is already active -- editing that list
+enables nothing on its own. The sanitizers are registered only when `redaction.enabled` is `true`,
+so setting `redaction.enabled: false` silently disarms the header too.
+
+**`enable_full_payloads: false` does not remove them.** It reads like the control for this, and is
+documented generally as preserving inputs and outputs for export, but AI-Q hands tool payloads to
+Relay as explicit scope values that the setting does not govern. With it disabled, the requested
+URL and the returned page content are still present in the trace. Do not rely on it here.
+
+ATOF appends to a JSONL file that is not rotated or pruned, so it accumulates URLs and page text
+for the life of the deployment. Auditing that file's access controls and retention, and those of
+every configured export destination, is the operator's responsibility. See
+[Redaction and privacy](../../docs/source/deployment/observability.md) for the system-wide picture.
 
 ### Reporting a Vulnerability
 
