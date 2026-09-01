@@ -85,11 +85,15 @@ functions:
     _type: data_science_agent
     llm: data_science_llm
     # tools omitted: inherit GSF, knowledge, and web tools from data_sources
+    ontology_provider:
+      provider: gsf
+      catalog_tools: [gsf__catalog_search]
+      analytical_tools: [gsf__text_to_sql]
     interaction_mode: headless
     response_mode: fdabench_choice
-    gsf_catalog_call_limit: ${AIQ_DS_GSF_CATALOG_CALL_LIMIT:-2}
-    gsf_text_to_sql_call_limit: ${AIQ_DS_GSF_TEXT_TO_SQL_CALL_LIMIT:-6}
-    gsf_cache_repeated_calls: true
+    structured_catalog_call_limit: ${AIQ_DS_STRUCTURED_CATALOG_CALL_LIMIT:-2}
+    structured_text_to_sql_call_limit: ${AIQ_DS_STRUCTURED_TEXT_TO_SQL_CALL_LIMIT:-6}
+    structured_cache_repeated_calls: true
     finalization_model_call_limit: ${AIQ_DS_FINALIZATION_MODEL_CALL_LIMIT:-18}
     recursion_limit: 64
     verbose: true

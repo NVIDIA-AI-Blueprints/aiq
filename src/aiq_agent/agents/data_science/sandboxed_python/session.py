@@ -19,7 +19,7 @@ from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
-_REFERENCE_PATTERN = re.compile(r"gsf_[1-9][0-9]*")
+_REFERENCE_PATTERN = re.compile(r"structured_[1-9][0-9]*")
 _REMOTE_EVIDENCE_DIR = "evidence"
 _REMOTE_REQUEST_DIR = "requests"
 _RUNNER_FILENAME = "runner.py"
@@ -114,7 +114,7 @@ class OpenShellPythonRunner:
         self._remote_root = PurePosixPath(runtime.workdir)
         self._remote_evidence_dir = self._remote_root / _REMOTE_EVIDENCE_DIR
         self._remote_request_dir = self._remote_root / _REMOTE_REQUEST_DIR
-        self._remote_manifest = self._remote_evidence_dir / "gsf-results.json"
+        self._remote_manifest = self._remote_evidence_dir / "structured-results.json"
         self._remote_runner = self._remote_root / _RUNNER_FILENAME
         self._runner_path = Path(__file__).with_name(_RUNNER_FILENAME)
         self._lock = asyncio.Lock()
@@ -170,7 +170,7 @@ class OpenShellPythonRunner:
                 return _json_response({"status": "error", "error": "invalid_python_response"})
 
     async def _prepare_request(self, code: str) -> tuple[str, str, str]:
-        """Upload a trusted runner, exact current GSF receipts, and one code request."""
+        """Upload a trusted runner, exact structured-data receipts, and one code request."""
 
         manifest, evidence_files = self._evidence_bundle()
         self._request_sequence += 1
@@ -188,36 +188,38 @@ class OpenShellPythonRunner:
         return str(request_path), str(response_path), str(log_path)
 
     def _evidence_bundle(self) -> tuple[bytes, dict[str, bytes]]:
-        """Build a sandbox-local manifest from bounded request-owned GSF receipts."""
+        """Build a sandbox-local manifest from bounded request-owned structured-data receipts."""
 
         raw_manifest = json.loads(self.host_manifest_path.read_text(encoding="utf-8"))
         entries = raw_manifest.get("results") if isinstance(raw_manifest, dict) else None
         if not isinstance(entries, list):
-            raise ValueError("invalid GSF evidence manifest")
+            raise ValueError("invalid structured-data evidence manifest")
 
         total_bytes = 0
         remote_entries: list[dict[str, Any]] = []
         evidence_files: dict[str, bytes] = {}
         for entry in entries:
             if not isinstance(entry, dict):
-                raise ValueError("invalid GSF evidence entry")
+                raise ValueError("invalid structured-data evidence entry")
             reference = entry.get("ref")
             if not isinstance(reference, str) or _REFERENCE_PATTERN.fullmatch(reference) is None:
-                raise ValueError("invalid GSF evidence reference")
+                raise ValueError("invalid structured-data evidence reference")
             host_path = Path(str(entry.get("path") or "")).resolve()
             if not host_path.is_relative_to(self.host_evidence_root):
-                raise ValueError("GSF evidence path escaped its request root")
+                raise ValueError("structured-data evidence path escaped its request root")
             content = host_path.read_bytes()
             json.loads(content)
             total_bytes += len(content)
             if total_bytes > self.limits.max_evidence_bytes:
-                raise ValueError("GSF evidence exceeds the configured upload limit")
+                raise ValueError("structured-data evidence exceeds the configured upload limit")
 
             remote_path = self._remote_evidence_dir / f"{reference}.json"
             evidence_files[str(remote_path)] = content
             remote_entries.append(
                 {
                     "ref": reference,
+                    "provider": entry.get("provider"),
+                    "tool_name": entry.get("tool_name"),
                     "question": entry.get("question"),
                     "database_name": entry.get("database_name"),
                     "request_id": entry.get("request_id"),
@@ -230,7 +232,7 @@ class OpenShellPythonRunner:
 
         manifest = _json_response({"version": 1, "results": remote_entries}).encode("utf-8")
         if total_bytes + len(manifest) > self.limits.max_evidence_bytes:
-            raise ValueError("GSF evidence manifest exceeds the configured upload limit")
+            raise ValueError("structured-data evidence manifest exceeds the configured upload limit")
         return manifest, evidence_files
 
     def _upload(self, files: dict[str, bytes]) -> None:

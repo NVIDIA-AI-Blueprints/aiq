@@ -27,8 +27,8 @@ def build_prompt_middleware(
     *,
     interaction_mode: InteractionMode = "interactive",
     response_mode: ResponseMode = "standard",
-    gsf_catalog_call_limit: int | None = None,
-    gsf_text_to_sql_call_limit: int | None = None,
+    structured_catalog_call_limit: int | None = None,
+    structured_text_to_sql_call_limit: int | None = None,
     python_call_limit: int | None = None,
 ) -> AgentMiddleware:
     """Render the data-science prompt with the request's exact tool surface."""
@@ -45,8 +45,8 @@ def build_prompt_middleware(
             has_catalog_context=context is not None and context.catalog_context is not None,
             interaction_mode=interaction_mode,
             response_mode=response_mode,
-            gsf_catalog_call_limit=gsf_catalog_call_limit,
-            gsf_text_to_sql_call_limit=gsf_text_to_sql_call_limit,
+            structured_catalog_call_limit=structured_catalog_call_limit,
+            structured_text_to_sql_call_limit=structured_text_to_sql_call_limit,
             python_call_limit=python_call_limit,
             current_datetime=datetime.now().astimezone().isoformat(timespec="seconds"),
         )

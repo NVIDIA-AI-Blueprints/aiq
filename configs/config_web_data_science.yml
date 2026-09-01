@@ -1,19 +1,47 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# Direct local Data Science Agent profile. This bypasses the top-level AI-Q
-# router until the data-science route is integrated.
+# Web profile for the Data Science Agent, served as an async job.
 #
-# Required: AIQ_DATA_SCIENCE_MODEL, INFERENCE_NVIDIA_API_KEY, AIQ_INFERENCE_BASE_URL,
-# TAVILY_API_KEY, GSF_BASE_URL, GSF_EMAIL, GSF_PASSWORD, RAG_SERVER_URL,
-# COLLECTION_NAME.
+# A DS run can take several minutes, so the agent is submitted to the async job
+# API instead of being held open on a request. Clients POST
+# /v1/jobs/async/submit with agent_type "data_science", then stream progress
+# from /v1/jobs/async/job/{job_id}/stream. Closing or refreshing the browser
+# does not cancel the run: reconnecting to the same job_id replays the stored
+# events and returns the final report.
+#
+# Async jobs run in a Dask worker that reloads this file, so NAT_CONFIG_FILE
+# must point at it and NAT_DASK_SCHEDULER_ADDRESS must be set.
+#
+# Required: INFERENCE_NVIDIA_API_KEY, AIQ_INFERENCE_BASE_URL,
+# AIQ_DATA_SCIENCE_MODEL, TAVILY_API_KEY, GSF_BASE_URL, GSF_EMAIL,
+# GSF_PASSWORD, RAG_SERVER_URL, COLLECTION_NAME.
 
 general:
+  use_uvloop: true
   telemetry:
     logging:
       console:
         _type: console
         level: INFO
+
+  front_end:
+    _type: aiq_api
+    runner_class: aiq_api.plugin.AIQAPIWorker
+    db_url: ${NAT_JOB_STORE_DB_URL:-sqlite+aiosqlite:///./jobs.db}
+    expiry_seconds: 86400  # 24 hours (min: 600, max: 604800/7 days)
+    cors:
+      allow_origin_regex: 'http://localhost(:\d+)?|http://127.0.0.1(:\d+)?'
+      allow_methods:
+        - GET
+        - POST
+        - DELETE
+        - OPTIONS
+      allow_headers:
+        - "*"
+      allow_credentials: true
+      expose_headers:
+        - "*"
 
 llms:
   data_science_llm:
@@ -33,6 +61,9 @@ function_groups:
     auth:
       mode: password
       email: ${GSF_EMAIL}
+      # This field takes the NAME of the env var holding the password, not the
+      # password itself. Using ${GSF_PASSWORD} here resolves to the secret and
+      # GSF then looks up an env var by that value, silently disabling the tools.
       password: GSF_PASSWORD  # pragma: allowlist secret
     include:
       - catalog_search
@@ -68,7 +99,7 @@ functions:
     collection_name: ${COLLECTION_NAME}
     top_k: 5
     rag_url: ${RAG_SERVER_URL}
-    # This direct workflow is retrieval-only; fail closed if an ingestion path is invoked.
+    # This profile is retrieval-only; fail closed if an ingestion path is invoked.
     ingest_url: http://127.0.0.1:9/v1
     timeout: ${RAG_RETRIEVAL_TIMEOUT_SECONDS:-300}
     summary_db: ${AIQ_SUMMARY_DB:-sqlite+aiosqlite:////tmp/aiq-ds-summaries.db}
@@ -86,11 +117,10 @@ functions:
     _type: data_science_agent
     llm: data_science_llm
     # tools omitted: inherit GSF, knowledge, and web tools from data_sources
-    ontology_provider:
-      provider: gsf
-      catalog_tools: [gsf__catalog_search]
-      analytical_tools: [gsf__text_to_sql]
-    interaction_mode: ${AIQ_DS_INTERACTION_MODE:-interactive}
+    # An async job has no channel back to the user, so the job runner always
+    # runs this agent headless regardless of the value set here. Leave it
+    # interactive only if the same config also serves a synchronous CLI run.
+    interaction_mode: ${AIQ_DS_INTERACTION_MODE:-headless}
     recursion_limit: 64
     verbose: true
 
