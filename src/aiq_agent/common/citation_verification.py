@@ -1345,6 +1345,48 @@ _SUSPICIOUS_SCHEMES_RE = re.compile(r"^(?:javascript|data|vbscript|file):", re.I
 # Body URL patterns (used by sanitize_report)
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(\s*(\w+://[^\s)]+)\)")
 _BODY_URL_RE = re.compile(r"\w+://[^\s<>\"']+")
+# Raw tool-call syntax that models sometimes emit as answer text. Shared so
+# callers can tell whether a response still has visible content once
+# sanitize_report() strips these fragments. Complete XML elements are removed
+# without consuming prose that follows them.
+_TOOL_CALL_XML_TAG = r"parameter|function|tool_call|tool_use|invoke|antml:\w+"
+LEAKED_TOOL_CALL_MARKUP_RE = re.compile(
+    rf"<(?P<tag>{_TOOL_CALL_XML_TAG})\b[^>]*>.*?</(?P=tag)\s*>|</?(?:{_TOOL_CALL_XML_TAG})\b[^>]*>",
+    re.DOTALL,
+)
+_JSON_DECODER = json.JSONDecoder()
+
+
+def _leaked_tool_call_json_end(text: str, start: int) -> int | None:
+    """Return the end offset of a tool-call JSON object at ``start``, else None."""
+    try:
+        payload, end = _JSON_DECODER.raw_decode(text, start)
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    is_tool_call = (
+        "tool_calls" in payload
+        or isinstance(payload.get("function"), dict)
+        or ("name" in payload and ("arguments" in payload or "parameters" in payload))
+    )
+    return end if is_tool_call else None
+
+
+def strip_leaked_tool_call_markup(text: str) -> str:
+    """Remove leaked XML/JSON tool-call payloads, preserving surrounding prose."""
+    text = LEAKED_TOOL_CALL_MARKUP_RE.sub("", text)
+    pieces: list[str] = []
+    cursor = 0
+    for match in re.finditer(r"\{", text):
+        if match.start() < cursor:
+            continue
+        end = _leaked_tool_call_json_end(text, match.start())
+        if end is not None:
+            pieces.append(text[cursor : match.start()])
+            cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces)
 
 
 @dataclass
@@ -1532,14 +1574,9 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
 
     sanitized_report = cleaned_body + ref_section
 
-    # --- Strip leaked tool-call XML fragments ---
+    # --- Strip leaked tool-call XML/JSON fragments ---
     # LLMs sometimes output raw tool-call syntax as text
-    sanitized_report = re.sub(
-        r"</?(parameter|function|tool_call|tool_use|invoke|antml:[\w]+)[\s>].*",
-        "",
-        sanitized_report,
-        flags=re.DOTALL,
-    )
+    sanitized_report = strip_leaked_tool_call_markup(sanitized_report)
 
     # --- Trim everything after the last citation in the Sources section ---
     # The LLM often appends meta-commentary after the references (e.g.,

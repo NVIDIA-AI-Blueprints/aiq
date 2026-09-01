@@ -1370,6 +1370,41 @@ class TestSanitizeReport:
         assert result.body_urls_removed == 0
         assert "Finding [1]" in result.sanitized_report
 
+    def test_leaked_tool_call_markup_is_stripped(self):
+        report = "Finding [1].\n<tool_call>\nweb_search\n</tool_call>"
+        result = sanitize_report(report)
+        assert "<tool_call>" not in result.sanitized_report
+        assert "Finding [1]" in result.sanitized_report
+
+    def test_markup_only_report_sanitizes_to_empty(self):
+        report = (
+            "<tool_call>\n"
+            "<function=web_search>\n"
+            '<parameter name="query">follow-up</parameter>\n'
+            "</function>\n"
+            "</tool_call>"
+        )
+        result = sanitize_report(report)
+        assert result.sanitized_report.strip() == ""
+
+    def test_markup_before_prose_preserves_following_text(self):
+        report = (
+            "<tool_call>\n"
+            "<function=web_search>\n"
+            '<parameter name="query">follow-up</parameter>\n'
+            "</function>\n"
+            "</tool_call>\n"
+            "CUDA is a parallel platform [1]."
+        )
+        result = sanitize_report(report)
+        assert "<tool_call>" not in result.sanitized_report
+        assert "CUDA is a parallel platform [1]." in result.sanitized_report
+
+    def test_json_only_tool_call_sanitizes_to_empty(self):
+        report = '{"name": "web_search", "arguments": {"query": "follow-up"}}'
+        result = sanitize_report(report)
+        assert result.sanitized_report.strip() == ""
+
     def test_plain_sources_heading_and_collapsed_lines_are_sanitized(self):
         report = (
             "Finding [1]. Another finding [2].\n\n"
