@@ -141,7 +141,6 @@ async def submit_agent_job(
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
     allow_internal: bool = False,
-    database_name: str | None = None,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -168,9 +167,6 @@ async def submit_agent_job(
         initial_files: Optional DeepAgents virtual filesystem files to seed into worker state.
         output_metadata: Optional metadata persisted with the final job output.
         allow_internal: Allow trusted callers to submit an internal-only agent.
-        database_name: Optional database scope the router resolved for this request.
-            Scoped requests are authoritative, so the worker must rebuild agent state
-            with the same scope rather than falling back to the configured default.
 
     Returns:
         The job ID.
@@ -434,7 +430,6 @@ async def submit_agent_job(
                 output_metadata,
                 principal_user_id(principal),
                 admission_token,
-                database_name,
             ],
         ),
         name=f"submit-job-{resolved_job_id}",
