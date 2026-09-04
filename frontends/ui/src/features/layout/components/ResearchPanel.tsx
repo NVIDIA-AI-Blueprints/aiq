@@ -61,6 +61,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
   const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
   const pendingTabLoadRef = useRef<{ jobId: string; tab: ResearchPanelTab } | null>(null)
 
+  // Clean up cancel fallback timer on unmount
   useEffect(() => {
     return () => {
       if (cancelFallbackRef.current) {
@@ -92,12 +93,16 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
     try {
       await cancelJob(cancelledJobId, idToken || undefined)
 
+      // Fallback: if the SSE stream is broken or stalled and the
+      // useDeepResearch hook's onJobStatus never receives the
+      // "interrupted" event, clean up locally after a grace period.
+      // This is a safety net in addition to the hook's own fallback.
       if (cancelFallbackRef.current) clearTimeout(cancelFallbackRef.current)
       cancelFallbackRef.current = setTimeout(() => {
         cancelFallbackRef.current = null
         const state = useChatStore.getState()
         if (!state.isDeepResearchStreaming || state.deepResearchJobId !== cancelledJobId) {
-          return
+          return // Already cleaned up by SSE or hook fallback
         }
         console.warn(
           '[ResearchPanel] Cancel fallback: SSE did not deliver interrupted status. Cleaning up locally.'
@@ -156,6 +161,9 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
       }
 
       if (deepResearchJobId && isStreamLoading) {
+        // Preserve the selected tab immediately, then load its required data
+        // once the current replay/fetch finishes. Without this, a mid-load
+        // tab switch can appear selected but never trigger its own fetch.
         pendingTabLoadRef.current = { jobId: deepResearchJobId, tab }
       }
 
@@ -165,6 +173,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
   )
 
   return (
+    // Wrapper: uses flex to keep button visible while panel animates
     <div
       className="relative flex h-full"
       style={{
@@ -175,11 +184,11 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
           : 'width 600ms ease-in-out, min-width 600ms ease-in-out',
       }}
     >
-      {}
+      {/* Toggle Tag Button - protruding from left side, always visible */}
       <button
         onClick={handleToggle}
         disabled={!isAuthenticated}
-        className={`research-panel-toggle border-base bg-surface-base relative z-10 flex w-10 shrink-0 items-center justify-center self-start overflow-hidden rounded-bl-lg border-b border-l border-r border-t transition-colors ${
+        className={`research-panel-toggle border-base bg-surface-base relative z-10 mt-[calc(var(--spacing)*3)] flex w-10 shrink-0 items-center justify-center self-start overflow-hidden rounded-l-lg border-b border-l border-r border-t transition-colors ${
           isAuthenticated
             ? 'cursor-pointer hover:border-[#76B900]'
             : 'cursor-not-allowed opacity-50'
@@ -219,14 +228,12 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
         </Text>
       </button>
 
-      {}
+      {/* Outer container: clips content, fills remaining space */}
       <div
-        className={`border-base bg-surface-base -ml-px h-full flex-1 overflow-hidden rounded-bl-xl ${
-          isOpen ? 'border-l' : ''
-        }`}
+        className="border-base bg-surface-base -ml-px h-full flex-1 overflow-hidden rounded-tl-xl border-l border-t"
         aria-hidden={!isOpen}
       >
-        {}
+        {/* Inner container: fixed width so content stays stable */}
         <Flex
           direction="col"
           className="h-full w-full"
@@ -240,7 +247,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
                 : 'opacity 100ms ease-in-out 500ms, visibility 0ms 600ms',
           }}
         >
-          {}
+          {/* Header with tabs and close button */}
           <Flex
             align="center"
             justify="between"
@@ -257,7 +264,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
                   { value: 'report', children: 'Report' },
                 ]}
               />
-              {}
+              {/* Stop Researching button - always visible, disabled when not streaming */}
               <Button
                 kind="tertiary"
                 size="small"
@@ -272,7 +279,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
               </Button>
             </Flex>
             <Flex align="center" gap="density-xl">
-              {}
+              {/* Close button */}
               <Button
                 kind="tertiary"
                 size="small"
@@ -286,7 +293,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
             </Flex>
           </Flex>
 
-          {}
+          {/* Content Area - each tab manages its own scrolling and footer */}
           <Flex direction="col" className="flex-1 overflow-hidden py-5 pl-6 pr-8">
             {isStreamLoading ? (
               <Flex direction="col" align="center" justify="center" className="h-full gap-4">

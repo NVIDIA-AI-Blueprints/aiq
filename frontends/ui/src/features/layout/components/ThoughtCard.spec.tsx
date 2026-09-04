@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { ThoughtCard, type ThoughtInfo } from './ThoughtCard'
 
+// Mock MarkdownRenderer
 vi.mock('@/shared/components/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content }: { content: string }) => (
     <div data-testid="markdown">{content}</div>
@@ -27,10 +28,10 @@ describe('ThoughtCard', () => {
   })
 
   describe('basic rendering', () => {
-    test('renders model name in all caps', () => {
+    test('renders model name', () => {
       render(<ThoughtCard thought={createThought({ modelName: 'claude-3' })} />)
 
-      expect(screen.getByText('CLAUDE-3')).toBeInTheDocument()
+      expect(screen.getByText('claude-3')).toBeInTheDocument()
     })
 
     test('renders workflow name when provided', () => {
@@ -134,6 +135,7 @@ describe('ThoughtCard', () => {
 
       await user.click(screen.getByRole('button'))
 
+      // Multiple markdown elements may be present (thinking + content)
       const markdownElements = screen.getAllByTestId('markdown')
       const hasThinkingContent = markdownElements.some((el) =>
         el.textContent?.includes('Deep thinking here...')
@@ -161,9 +163,11 @@ describe('ThoughtCard', () => {
 
       render(<ThoughtCard thought={createThought({ content: 'Content' })} />)
 
+      // Expand
       await user.click(screen.getByRole('button'))
       expect(screen.getByText('Output')).toBeInTheDocument()
 
+      // Collapse
       await user.click(screen.getByRole('button'))
       expect(screen.queryByText('Output')).not.toBeInTheDocument()
     })
@@ -180,6 +184,7 @@ describe('ThoughtCard', () => {
         />
       )
 
+      // Preview should show thinking, not output
       expect(screen.getByText('Thinking content')).toBeInTheDocument()
     })
 

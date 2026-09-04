@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { FileSourcesTab } from './FileSourcesTab'
 
+// Mock the chat store
 vi.mock('@/features/chat/store', () => ({
   useChatStore: vi.fn((selector) => {
     const state = {
@@ -16,6 +17,7 @@ vi.mock('@/features/chat/store', () => ({
   }),
 }))
 
+// Mock useAppConfig
 vi.mock('@/shared/context', () => ({
   useAppConfig: () => ({
     authRequired: true,
@@ -30,6 +32,8 @@ vi.mock('@/shared/context', () => ({
   }),
 }))
 
+
+// Mock the file upload hook
 const mockUploadFiles = vi.fn()
 const mockDeleteFile = vi.fn()
 const mockClearError = vi.fn()
@@ -54,6 +58,7 @@ vi.mock('@/features/documents', () => ({
   mapToDisplayStatus: (status: string) => status,
 }))
 
+// Mock the layout store
 vi.mock('../store', () => ({
   useLayoutStore: vi.fn((selector) => {
     const state = {
@@ -63,6 +68,7 @@ vi.mock('../store', () => ({
   }),
 }))
 
+// Mock child components
 vi.mock('./FileSourceCard', () => ({
   FileSourceCard: ({
     title,
@@ -253,6 +259,7 @@ describe('FileSourcesTab', () => {
   })
 
   test('does not show spinner when upload belongs to a different session', () => {
+    // Active collection is a different session than the one rendered
     vi.mocked(useDocumentsStore).mockImplementation((selector) => {
       const state = { currentCollectionName: 'other-session-99' }
       return (selector as (s: typeof state) => unknown)(state)
@@ -270,6 +277,7 @@ describe('FileSourcesTab', () => {
 
     render(<FileSourcesTab />)
 
+    // Spinner should NOT appear because the upload is for a different session
     expect(screen.queryByText('Checking for files...')).not.toBeInTheDocument()
     expect(screen.getByText('No Attached Files')).toBeInTheDocument()
   })

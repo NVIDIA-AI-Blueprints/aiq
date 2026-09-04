@@ -35,7 +35,6 @@ const idleState = {
   isStreaming: false,
   isDeepResearchStreaming: false,
   deepResearchStatus: null,
-  deepResearchOwnerConversationId: null,
   currentConversation: { id: 'conv-1', messages: [] },
   pendingInteraction: null,
 }
@@ -68,61 +67,31 @@ describe('useIsCurrentSessionBusy', () => {
     expect(result.current).toBe(true)
   })
 
-  it('returns true when deep research SSE is streaming and owned by the current session', () => {
+  it('returns true when deep research SSE is streaming', () => {
     mockUseChatStore.mockImplementation((selector: (state: any) => any) =>
-      selector({
-        ...idleState,
-        isDeepResearchStreaming: true,
-        deepResearchStatus: 'running',
-        deepResearchOwnerConversationId: 'conv-1',
-      })
+      selector({ ...idleState, isDeepResearchStreaming: true, deepResearchStatus: 'running' })
     )
 
     const { result } = renderHook(() => useIsCurrentSessionBusy())
     expect(result.current).toBe(true)
   })
 
-  it('returns true when deep research status is "submitted" for the current session', () => {
+  it('returns true when deep research status is "submitted"', () => {
     mockUseChatStore.mockImplementation((selector: (state: any) => any) =>
-      selector({
-        ...idleState,
-        deepResearchStatus: 'submitted',
-        deepResearchOwnerConversationId: 'conv-1',
-      })
+      selector({ ...idleState, deepResearchStatus: 'submitted' })
     )
 
     const { result } = renderHook(() => useIsCurrentSessionBusy())
     expect(result.current).toBe(true)
   })
 
-  it('returns true when deep research status is "running" for the current session', () => {
+  it('returns true when deep research status is "running"', () => {
     mockUseChatStore.mockImplementation((selector: (state: any) => any) =>
-      selector({
-        ...idleState,
-        deepResearchStatus: 'running',
-        deepResearchOwnerConversationId: 'conv-1',
-      })
+      selector({ ...idleState, deepResearchStatus: 'running' })
     )
 
     const { result } = renderHook(() => useIsCurrentSessionBusy())
     expect(result.current).toBe(true)
-  })
-
-  it('returns false when deep research is streaming but owned by another session', () => {
-    // Session A owns the background deep research; session B (current) must not be
-    // marked busy, so no Stop button renders and B's socket cannot be disconnected.
-    mockUseChatStore.mockImplementation((selector: (state: any) => any) =>
-      selector({
-        ...idleState,
-        isDeepResearchStreaming: true,
-        deepResearchStatus: 'running',
-        deepResearchOwnerConversationId: 'conv-A',
-        currentConversation: { id: 'conv-B', messages: [] },
-      })
-    )
-
-    const { result } = renderHook(() => useIsCurrentSessionBusy())
-    expect(result.current).toBe(false)
   })
 
   it('returns false when deep research status is "success" (terminal state)', () => {
@@ -159,7 +128,6 @@ describe('useIsCurrentSessionBusy', () => {
         isStreaming: true,
         isDeepResearchStreaming: true,
         deepResearchStatus: 'running',
-        deepResearchOwnerConversationId: 'conv-1',
       })
     )
 
