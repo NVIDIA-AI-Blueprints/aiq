@@ -15,8 +15,6 @@
 
 """State models for chat research agent."""
 
-from .catalog import CatalogCandidate
-from .catalog import CatalogRoutingResponse
 from .depth import DepthDecision
 from .intent import IntentResult
 from .result import RESEARCH_WORKFLOW_FAILURE_ERROR
@@ -30,8 +28,6 @@ from .state import ChatResearcherState
 __all__ = [
     "ChatResearcherResponse",
     "ChatResearcherState",
-    "CatalogCandidate",
-    "CatalogRoutingResponse",
     "DepthDecision",
     "IntentResult",
     "RESEARCH_WORKFLOW_FAILURE_ERROR",

@@ -15,7 +15,6 @@
 
 """Nodes for the chat researcher agent."""
 
-from .context_aware_intent_router import ContextAwareIntentRouter
 from .intent_classifier import IntentClassifier
 
-__all__ = ["ContextAwareIntentRouter", "IntentClassifier"]
+__all__ = ["IntentClassifier"]

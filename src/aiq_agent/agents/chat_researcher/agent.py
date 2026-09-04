@@ -62,7 +62,6 @@ except ImportError:
 
 from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from .models import ChatResearcherState
-from .models import IntentResult
 from .models import ShallowResult
 from .models import WorkflowFailure
 from .utils import trim_message_history
@@ -131,7 +130,6 @@ class ChatResearcherAgent:
         report_edit_job_submitter: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
         report_edit_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
         report_seed_files_fn: Callable[[ChatResearcherState], Awaitable[dict[str, Any] | None]] | None = None,
-        hybrid_research_fn: Callable[[ChatResearcherState], Awaitable[dict[str, Any]]] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         validate_deep_research_tools_fn: Callable[[list[str] | None], tuple[bool, str]] | None = None,
     ) -> None:
@@ -165,7 +163,6 @@ class ChatResearcherAgent:
         self.report_edit_job_submitter = report_edit_job_submitter
         self.report_edit_fn = report_edit_fn
         self.report_seed_files_fn = report_seed_files_fn
-        self.hybrid_research_fn = hybrid_research_fn
         self.checkpointer = checkpointer
         self.validate_deep_research_tools_fn = validate_deep_research_tools_fn
 
@@ -175,44 +172,15 @@ class ChatResearcherAgent:
         """Build the LangGraph workflow."""
 
         async def intent_classifier_node(state: ChatResearcherState) -> dict[str, Any]:
-            try:
-                return await run_agent(
-                    "intent_classifier",
-                    lambda: self.intent_classifier_fn(state),
-                    input_value={
-                        "message_count": len(state.messages),
-                        "data_source_count": len(state.data_sources or []),
-                        "has_active_report": bool(state.active_report_job_id),
-                    },
-                )
-            except Exception as error:
-                logger.warning("Intent routing failed (error_type=%s)", type(error).__name__)
-                return {
-                    "user_intent": IntentResult(intent="meta", target="meta"),
-                    "messages": [
-                        AIMessage(
-                            content=(
-                                "There was an error routing your request. Please try again. "
-                                "If the problem persists, please contact support."
-                            )
-                        )
-                    ],
-                    "workflow_outcome": _research_workflow_failure(),
-                }
-
-        async def hybrid_research_node(state: ChatResearcherState) -> dict[str, Any]:
-            try:
-                if self.hybrid_research_fn is None:
-                    raise RuntimeError("Hybrid research is not configured")
-                return await self.hybrid_research_fn(state)
-            except Exception as error:
-                logger.error("Hybrid research failed (error_type=%s)", type(error).__name__)
-                return {
-                    "messages": [
-                        AIMessage(content="I ran into an error while researching your question. Please try again.")
-                    ],
-                    "workflow_outcome": _research_workflow_failure(),
-                }
+            return await run_agent(
+                "intent_classifier",
+                lambda: self.intent_classifier_fn(state),
+                input_value={
+                    "message_count": len(state.messages),
+                    "data_source_count": len(state.data_sources or []),
+                    "has_active_report": bool(state.active_report_job_id),
+                },
+            )
 
         async def clarifier_node(state: ChatResearcherState) -> dict[str, Any]:
             original_query = get_latest_user_query(state.messages)
@@ -231,8 +199,7 @@ class ChatResearcherAgent:
                         },
                     )
 
-            uses_parent_report = bool(state.user_intent and state.user_intent.use_parent_report_context)
-            if self.enable_clarifier and not state.skip_clarifier and not uses_parent_report:
+            if self.enable_clarifier and not state.skip_clarifier:
                 if self.clarifier_fn is None:
                     raise ValueError(
                         "enable_clarifier is True but clarifier_agent is not defined in config. "
@@ -537,8 +504,6 @@ class ChatResearcherAgent:
                 if state.user_intent.report_action == "edit":
                     return "report_edit"
                 return "report_ask"
-            if state.user_intent and state.user_intent.target == "hybrid_research":
-                return "hybrid_research"
             if state.depth_decision and state.depth_decision.decision == "deep":
                 return "clarifier"
             return "shallow_research"
@@ -586,7 +551,6 @@ class ChatResearcherAgent:
         graph.add_node("deep_research", deep_research_node)
         graph.add_node("report_ask", report_ask_node)
         graph.add_node("report_edit", report_edit_node)
-        graph.add_node("hybrid_research", hybrid_research_node)
 
         graph.set_entry_point("intent_classifier")
 
@@ -599,7 +563,6 @@ class ChatResearcherAgent:
                 "shallow_research": "shallow_research",
                 "report_ask": "report_ask",
                 "report_edit": "report_edit",
-                "hybrid_research": "hybrid_research",
             },
         )
 
@@ -615,7 +578,6 @@ class ChatResearcherAgent:
         graph.add_edge("deep_research", END)
         graph.add_edge("report_ask", END)
         graph.add_edge("report_edit", END)
-        graph.add_edge("hybrid_research", END)
 
         return graph.compile(checkpointer=self.checkpointer)
 
@@ -635,26 +597,18 @@ class ChatResearcherAgent:
         logger.info("ChatResearcherAgent: Starting workflow")
 
         if isinstance(state, dict):
-            input_state = {
-                **state,
-                "database_name": state.get("database_name"),
-                "catalog_context": None,
-                "catalog_request_id": None,
-            }
+            input_state = state
             messages = state.get("messages", [])
         else:
             input_state = {
                 "messages": state.messages,
                 "user_info": state.user_info,
                 "data_sources": state.data_sources,
-                "database_name": state.database_name,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
                 "workflow_outcome": None,
                 "skip_clarifier": state.skip_clarifier,
                 "active_report_job_id": state.active_report_job_id,
-                "catalog_context": None,
-                "catalog_request_id": None,
                 # Pass through; the keep-if-set reducer preserves a prior in-session report when
                 # this turn supplies None, so report follow-up works across turns without a job.
                 "last_report_markdown": state.last_report_markdown,

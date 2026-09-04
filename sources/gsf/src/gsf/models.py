@@ -3,23 +3,11 @@
 
 """Typed, NAT-independent contracts for GSF capabilities."""
 
-from typing import Annotated
 from typing import Any
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
-from pydantic import StringConstraints
-
-DatabaseName = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True,
-        min_length=1,
-        max_length=128,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
-    ),
-]
 
 
 class GSFRequest(BaseModel):
@@ -38,7 +26,7 @@ class CatalogSearchRequest(GSFRequest):
     """Find semantic candidates relevant to an enterprise-data question."""
 
     question: str = Field(min_length=1, max_length=4_096)
-    database_name: DatabaseName | None = None
+    database_name: str | None = None
     max_results: int = Field(default=10, ge=1, le=100)
     max_distance: float = Field(default=0.75, gt=0)
 
@@ -84,7 +72,7 @@ class TextToSQLRequest(GSFRequest):
     """Generate and execute validated SQL with bounded results."""
 
     question: str = Field(min_length=1, max_length=4_096)
-    database_name: DatabaseName | None = None
+    database_name: str | None = None
     max_rows: int = Field(default=1_000, ge=1)
 
 
@@ -92,7 +80,7 @@ class TextToPQLRequest(GSFRequest):
     """Run a natural-language question through GSF's PQL prediction path."""
 
     question: str = Field(min_length=1, max_length=4_096)
-    database_name: DatabaseName | None = Field(
+    database_name: str | None = Field(
         default=None,
         description="Optional benchmark-only database selector; normal AI-Q calls leave this unset.",
     )
@@ -140,6 +128,6 @@ class QueryContextRequest(GSFRequest):
     """Build compact, authorized context for a later SQL-generation step."""
 
     question: str = Field(min_length=1, max_length=4_096)
-    database_name: DatabaseName | None = None
+    database_name: str | None = None
     object_ids: list[str] = Field(default_factory=list)
     token_budget: int | None = Field(default=None, ge=1)

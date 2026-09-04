@@ -26,8 +26,8 @@ class TestNodesInit:
         assert IntentClassifier is not None
 
     def test_all_exports(self):
-        """Test that __all__ contains the entry-routing nodes."""
+        """Test that __all__ contains expected exports (orchestration is IntentClassifier only)."""
         from aiq_agent.agents.chat_researcher import nodes
 
         assert "IntentClassifier" in nodes.__all__
-        assert nodes.__all__ == ["ContextAwareIntentRouter", "IntentClassifier"]
+        assert nodes.__all__ == ["IntentClassifier"]
