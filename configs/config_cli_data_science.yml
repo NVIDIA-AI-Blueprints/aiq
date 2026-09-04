@@ -86,10 +86,6 @@ functions:
     _type: data_science_agent
     llm: data_science_llm
     # tools omitted: inherit GSF, knowledge, and web tools from data_sources
-    ontology_provider:
-      provider: gsf
-      catalog_tools: [gsf__catalog_search]
-      analytical_tools: [gsf__text_to_sql]
     interaction_mode: ${AIQ_DS_INTERACTION_MODE:-interactive}
     recursion_limit: 64
     verbose: true

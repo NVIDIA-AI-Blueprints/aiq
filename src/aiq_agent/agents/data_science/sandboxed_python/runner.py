@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""One-shot scientific Python runner with request-scoped structured-data helpers."""
+"""One-shot scientific Python runner with request-scoped GSF evidence helpers."""
 
 from __future__ import annotations
 
@@ -69,59 +69,49 @@ def _combined_output(stdout: _CappedStringIO, stderr: _CappedStringIO, max_outpu
 def _read_manifest(manifest_path: Path) -> dict[str, Any]:
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
-        raise ValueError("invalid structured-data evidence manifest")
+        raise ValueError("invalid GSF evidence manifest")
     return payload
 
 
-def _analysis_helpers(manifest_path: Path) -> dict[str, Callable[..., Any]]:
+def _gsf_helpers(manifest_path: Path) -> dict[str, Callable[..., Any]]:
     """Build trusted helpers that reload the authoritative receipt manifest."""
 
-    def list_analysis_results() -> pd.DataFrame:
+    def list_gsf_results() -> pd.DataFrame:
         entries = _read_manifest(manifest_path).get("results") or []
-        columns = [
-            "ref",
-            "provider",
-            "tool_name",
-            "question",
-            "database_name",
-            "request_id",
-            "row_count",
-            "columns",
-            "truncated",
-        ]
+        columns = ["ref", "question", "database_name", "request_id", "row_count", "columns", "truncated"]
         return pd.DataFrame(entries).reindex(columns=columns)
 
     def resolve(reference: str | None = None) -> dict[str, Any]:
         entries = _read_manifest(manifest_path).get("results") or []
         if not entries:
-            raise LookupError("No successful structured-data results are registered for this request.")
+            raise LookupError("No successful GSF text-to-SQL results are registered for this request.")
         if reference in {None, "latest"}:
             return entries[-1]
         for entry in entries:
             if entry.get("ref") == reference:
                 return entry
         available = ", ".join(str(entry.get("ref")) for entry in entries)
-        raise KeyError(f"Unknown structured-data result reference {reference!r}. Available references: {available}")
+        raise KeyError(f"Unknown GSF result reference {reference!r}. Available references: {available}")
 
-    def analysis_result(reference: str | None = None) -> dict[str, Any]:
+    def gsf_result(reference: str | None = None) -> dict[str, Any]:
         entry = resolve(reference)
         return json.loads(Path(entry["path"]).read_text(encoding="utf-8"))
 
-    def analysis_rows(reference: str | None = None) -> pd.DataFrame:
-        return pd.DataFrame(analysis_result(reference).get("rows") or [])
+    def gsf_rows(reference: str | None = None) -> pd.DataFrame:
+        return pd.DataFrame(gsf_result(reference).get("rows") or [])
 
-    def analysis_sql(reference: str | None = None) -> str:
-        return str(analysis_result(reference).get("sql") or "")
+    def gsf_sql(reference: str | None = None) -> str:
+        return str(gsf_result(reference).get("sql") or "")
 
-    def analysis_latest() -> pd.DataFrame:
-        return analysis_rows("latest")
+    def gsf_latest() -> pd.DataFrame:
+        return gsf_rows("latest")
 
     return {
-        "analysis_latest": analysis_latest,
-        "analysis_result": analysis_result,
-        "analysis_rows": analysis_rows,
-        "analysis_sql": analysis_sql,
-        "list_analysis_results": list_analysis_results,
+        "gsf_latest": gsf_latest,
+        "gsf_result": gsf_result,
+        "gsf_rows": gsf_rows,
+        "gsf_sql": gsf_sql,
+        "list_gsf_results": list_gsf_results,
     }
 
 
@@ -157,13 +147,13 @@ def _visible_variables(namespace: dict[str, Any]) -> list[str]:
         "date",
         "datetime",
         "defaultdict",
-        "analysis_latest",
-        "analysis_result",
-        "analysis_rows",
-        "analysis_sql",
+        "gsf_latest",
+        "gsf_result",
+        "gsf_rows",
+        "gsf_sql",
         "itertools",
         "json",
-        "list_analysis_results",
+        "list_gsf_results",
         "math",
         "np",
         "pd",
@@ -200,7 +190,7 @@ def _new_namespace(manifest_path: Path) -> dict[str, Any]:
         "stats": stats,
         "timedelta": timedelta,
         "timezone": timezone,
-        **_analysis_helpers(manifest_path),
+        **_gsf_helpers(manifest_path),
     }
 
 
