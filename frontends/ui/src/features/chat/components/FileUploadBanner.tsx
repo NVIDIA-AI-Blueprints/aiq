@@ -56,6 +56,7 @@ const getBannerContent = (type: FileUploadStatusType): BannerContent | null => {
         dismissable: false,
       }
     default:
+      // Legacy/unknown types from persisted conversations — skip silently
       return null
   }
 }
@@ -70,6 +71,7 @@ export const FileUploadBanner: FC<FileUploadBannerProps> = ({
 }) => {
   const content = getBannerContent(type)
 
+  // Skip rendering for unknown/legacy types
   if (!content) return null
 
   return (

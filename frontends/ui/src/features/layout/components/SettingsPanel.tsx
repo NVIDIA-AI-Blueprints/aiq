@@ -65,9 +65,9 @@ export const SettingsPanel: FC = memo(function SettingsPanel() {
         </Text>
       }
     >
-      {}
+      {/* Appearance Section */}
       <Flex direction="col" gap="3">
-        <Text kind="label/semibold/xs" className="text-subtle font-mono uppercase tracking-widest">
+        <Text kind="label/semibold/xs" className="text-subtle uppercase">
           UI Theme Options
         </Text>
 

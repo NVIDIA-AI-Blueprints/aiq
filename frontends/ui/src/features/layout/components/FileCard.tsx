@@ -186,10 +186,7 @@ export const FileCard: FC<FileCardProps> = ({ file }) => {
           {/* File Content */}
           {file.content && (
             <Flex direction="col" gap="1" className="mt-2">
-              <Text
-                kind="label/semibold/xs"
-                className="text-subtle font-mono uppercase tracking-widest"
-              >
+              <Text kind="label/semibold/xs" className="text-subtle uppercase">
                 Content
               </Text>
               {shouldRenderMarkdown ? (

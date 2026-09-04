@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { ResearchPanel } from './ResearchPanel'
 
+// Mock the stores
 const mockCloseRightPanel = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockSetResearchPanelTab = vi.fn()
@@ -106,6 +107,7 @@ describe('ResearchPanel', () => {
 
       render(<ResearchPanel isAuthenticated={true} />)
 
+      // Panel should be visible - toggle button and close button should be present
       expect(screen.getByTestId('research-panel-toggle')).toBeInTheDocument()
       expect(screen.getByTestId('research-panel-close')).toBeInTheDocument()
     })
@@ -115,6 +117,7 @@ describe('ResearchPanel', () => {
 
       const { container } = render(<ResearchPanel isAuthenticated={true} />)
 
+      // Find the outer container with aria-hidden
       const outerPanel = container.querySelector('[aria-hidden="true"]')
       expect(outerPanel).toBeInTheDocument()
     })
@@ -235,6 +238,7 @@ describe('ResearchPanel', () => {
 
       render(<ResearchPanel isAuthenticated={true} />)
 
+      // Spinner is now in the toggle tag button
       expect(screen.getByLabelText('Researching')).toBeInTheDocument()
     })
 
@@ -243,6 +247,7 @@ describe('ResearchPanel', () => {
 
       render(<ResearchPanel isAuthenticated={true} />)
 
+      // When not streaming, the generate icon is shown instead of spinner
       expect(screen.queryByLabelText('Researching')).not.toBeInTheDocument()
     })
   })
@@ -277,6 +282,7 @@ describe('ResearchPanel', () => {
     test('renders toggle tag button', () => {
       render(<ResearchPanel isAuthenticated={true} />)
 
+      // The toggle tag button has a specific data-testid
       expect(screen.getByTestId('research-panel-toggle')).toBeInTheDocument()
       expect(screen.getByText('Show Research')).toBeInTheDocument()
     })

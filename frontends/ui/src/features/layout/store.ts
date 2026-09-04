@@ -22,8 +22,6 @@ import { createDataSourcesClient, type DataSourceFromAPI } from '@/adapters/api'
 
 const initialState: LayoutState = {
   isSessionsPanelOpen: false,
-  sessionsCollapsed: false,
-  sessionsAutoCollapsed: false,
   rightPanel: 'data-sources',
   researchPanelTab: 'tasks',
   dataSourcesPanelTab: 'connections',
@@ -33,8 +31,6 @@ const initialState: LayoutState = {
   knowledgeLayerAvailable: false, // Default to false until API confirms availability
   dataSourcesLoading: false,
   dataSourcesError: null,
-  promptDraft: null,
-  selectedModel: undefined,
   // Deprecated aliases for backwards compatibility
   detailsPanelTab: 'report',
   dataSourcePanelTab: 'connections',
@@ -55,48 +51,10 @@ export const useLayoutStore = create<LayoutStore>()(
       setSessionsPanelOpen: (open: boolean) =>
         set({ isSessionsPanelOpen: open }, false, 'setSessionsPanelOpen'),
 
-      toggleSessionsSidebar: () =>
-        set(
-          (state) => ({
-            sessionsCollapsed: !state.sessionsCollapsed,
-            sessionsAutoCollapsed: false,
-          }),
-          false,
-          'toggleSessionsSidebar'
-        ),
-
-      setSessionsCollapsed: (collapsed: boolean) =>
-        set(
-          { sessionsCollapsed: collapsed, sessionsAutoCollapsed: false },
-          false,
-          'setSessionsCollapsed'
-        ),
-
       openRightPanel: (panel: RightPanelType) =>
-        set(
-          (state) => {
-            const collapsesSidebar = panel === 'research' || panel === 'data-sources'
-            if (collapsesSidebar && !state.sessionsCollapsed) {
-              return { rightPanel: panel, sessionsCollapsed: true, sessionsAutoCollapsed: true }
-            }
-            if (!collapsesSidebar && state.sessionsAutoCollapsed) {
-              return { rightPanel: panel, sessionsCollapsed: false, sessionsAutoCollapsed: false }
-            }
-            return { rightPanel: panel }
-          },
-          false,
-          'openRightPanel'
-        ),
+        set({ rightPanel: panel }, false, 'openRightPanel'),
 
-      closeRightPanel: () =>
-        set(
-          (state) =>
-            state.sessionsAutoCollapsed
-              ? { rightPanel: null, sessionsCollapsed: false, sessionsAutoCollapsed: false }
-              : { rightPanel: null },
-          false,
-          'closeRightPanel'
-        ),
+      closeRightPanel: () => set({ rightPanel: null }, false, 'closeRightPanel'),
 
       setResearchPanelTab: (tab: ResearchPanelTab) =>
         set({ researchPanelTab: tab }, false, 'setResearchPanelTab'),
@@ -122,15 +80,6 @@ export const useLayoutStore = create<LayoutStore>()(
         set({ enabledDataSourceIds: ids }, false, 'setEnabledDataSources'),
 
       setTheme: (theme: ThemeMode) => set({ theme }, false, 'setTheme'),
-
-      setPromptDraft: (value: string | null) =>
-        set({ promptDraft: value }, false, 'setPromptDraft'),
-
-      setSelectedModel: (model: string | undefined) =>
-        set({ selectedModel: model }, false, 'setSelectedModel'),
-
-      resetComposerState: () =>
-        set({ promptDraft: null, selectedModel: undefined }, false, 'resetComposerState'),
 
       fetchDataSources: async (authToken?: string) => {
         set({ dataSourcesLoading: true, dataSourcesError: null }, false, 'fetchDataSources/start')

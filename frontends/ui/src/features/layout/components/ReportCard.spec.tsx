@@ -6,12 +6,14 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { ReportCard } from './ReportCard'
 
+// Mock MarkdownRenderer
 vi.mock('@/shared/components/MarkdownRenderer', () => ({
   MarkdownRenderer: ({ content }: { content: string }) => (
     <div data-testid="markdown">{content}</div>
   ),
 }))
 
+// Mock download utilities
 const mockDownloadAsMarkdown = vi.fn()
 vi.mock('@/utils/download-as-markdown', () => ({
   downloadAsMarkdown: (...args: unknown[]) => mockDownloadAsMarkdown(...args),
@@ -27,6 +29,7 @@ vi.mock('@/hooks/use-download-pdf', () => ({
   }),
 }))
 
+// Mock the centralized busy hook (replaces ad-hoc store checks)
 let mockIsBusy = false
 
 vi.mock('@/features/chat', () => ({

@@ -6,6 +6,7 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
 import { FileSourceCard } from './FileSourceCard'
 
+// Mock useIsCurrentSessionBusy hook
 const mockUseIsCurrentSessionBusy = vi.fn(() => false)
 vi.mock('@/features/chat', () => ({
   useIsCurrentSessionBusy: () => mockUseIsCurrentSessionBusy(),
@@ -48,14 +49,14 @@ describe('FileSourceCard', () => {
     render(<FileSourceCard {...defaultProps} status="uploading" />)
 
     expect(screen.getByText('Uploading...')).toBeInTheDocument()
-    expect(screen.getByLabelText('Uploading...')).toBeInTheDocument()
+    expect(screen.getByLabelText('Uploading...')).toBeInTheDocument() // Spinner
   })
 
   test('renders ingesting status with spinner', () => {
     render(<FileSourceCard {...defaultProps} status="ingesting" />)
 
     expect(screen.getByText('Ingesting...')).toBeInTheDocument()
-    expect(screen.getByLabelText('Ingesting...')).toBeInTheDocument()
+    expect(screen.getByLabelText('Ingesting...')).toBeInTheDocument() // Spinner
   })
 
   test('renders error status with error message', () => {
@@ -80,6 +81,7 @@ describe('FileSourceCard', () => {
   test('displays formatted timestamp', () => {
     render(<FileSourceCard {...defaultProps} />)
 
+    // Check for formatted date (month day, time format)
     expect(screen.getByText(/jan 15/i)).toBeInTheDocument()
   })
 
@@ -140,6 +142,7 @@ describe('FileSourceCard - Expiration Display', () => {
   }
 
   test('shows "Expires in H:MM" when file has not yet expired', () => {
+    // uploaded 2 hours ago, expires in 12 hours => 10 hours remaining
     render(
       <FileSourceCard
         {...baseProps}
@@ -152,6 +155,7 @@ describe('FileSourceCard - Expiration Display', () => {
   })
 
   test('shows "Deletion Pending - Reupload" when file has expired', () => {
+    // uploaded 24 hours ago, expires in 12 hours => expired 12 hours ago
     render(
       <FileSourceCard
         {...baseProps}

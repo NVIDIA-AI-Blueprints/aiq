@@ -7,6 +7,7 @@
  * Reusable components for the chat feature.
  */
 
+// Message components
 export { UserMessage } from './UserMessage'
 export type { UserMessageProps } from './UserMessage'
 
@@ -16,6 +17,7 @@ export type { AgentPromptProps, PromptType } from './AgentPrompt'
 export { AgentResponse } from './AgentResponse'
 export type { AgentResponseProps } from './AgentResponse'
 
+// Banner components
 export { FileUploadBanner } from './FileUploadBanner'
 export type { FileUploadBannerProps } from './FileUploadBanner'
 
@@ -27,5 +29,6 @@ export type { DeepResearchBannerProps } from './DeepResearchBanner'
 
 export { NoSourcesBanner } from './NoSourcesBanner'
 
+// Thinking/status components
 export { ChatThinking } from './ChatThinking'
 export type { ChatThinkingProps } from './ChatThinking'

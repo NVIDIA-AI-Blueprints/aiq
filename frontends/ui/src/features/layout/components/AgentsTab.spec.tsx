@@ -1,16 +1,30 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { render, screen } from '@/test-utils'
-import { describe, test, expect, beforeEach } from 'vitest'
+import { render, screen, within } from '@/test-utils'
+import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { AgentsTab } from './AgentsTab'
 import { useChatStore } from '@/features/chat'
+import type { AgentInfo } from './AgentCard'
 import type { DeepResearchAgent, DeepResearchToolCall } from '@/features/chat/types'
+
+vi.mock('./AgentCard', () => ({
+  AgentCard: ({ agent }: { agent: AgentInfo }) => (
+    <div data-testid="agent-card">
+      {agent.name}
+      {agent.toolCalls?.map((tc) => (
+        <div key={tc.id} data-testid="tool-call">
+          {tc.name}
+        </div>
+      ))}
+    </div>
+  ),
+}))
 
 const createStoreAgent = (overrides: Partial<DeepResearchAgent> = {}): DeepResearchAgent => ({
   id: 'agent-1',
-  name: 'researcher',
-  status: 'complete',
+  name: 'test-agent',
+  status: 'running',
   startedAt: new Date(),
   ...overrides,
 })
@@ -25,98 +39,125 @@ const createToolCall = (overrides: Partial<DeepResearchToolCall> = {}): DeepRese
 
 describe('AgentsTab', () => {
   beforeEach(() => {
+    vi.clearAllMocks()
     useChatStore.setState({
       deepResearchAgents: [],
       deepResearchToolCalls: [],
-      deepResearchLLMSteps: [],
     })
   })
 
   describe('empty state', () => {
-    test('shows empty state when there are no steps', () => {
+    test('shows empty state when no agents', () => {
       render(<AgentsTab />)
+
+      expect(screen.getByText('No agent activity available.')).toBeInTheDocument()
       expect(
-        screen.getByText('Research steps will appear here as the agent works.')
+        screen.getByText(
+          'These details appear during active research and may not be available for completed reports.'
+        )
       ).toBeInTheDocument()
     })
 
-    test('shows the description in the header', () => {
+    test('shows description in header', () => {
       render(<AgentsTab />)
-      expect(screen.getByText('What the agent did, grouped by step.')).toBeInTheDocument()
+
+      expect(
+        screen.getByText(
+          'Active source router, planner, researcher, and writer agents executing tasks.'
+        )
+      ).toBeInTheDocument()
     })
   })
 
-  describe('with a completed run', () => {
-    test('renders the Steps header', () => {
-      useChatStore.setState({ deepResearchAgents: [createStoreAgent()] })
+  describe('with agents', () => {
+    test('renders header', () => {
+      useChatStore.setState({
+        deepResearchAgents: [createStoreAgent()],
+      })
+
       render(<AgentsTab />)
-      expect(screen.getByText('Steps')).toBeInTheDocument()
+
+      expect(screen.getByText('Agents')).toBeInTheDocument()
     })
 
-    test('renders a data tool call in the trace (same trace as chat)', () => {
+    test('renders agent cards', () => {
       useChatStore.setState({
-        deepResearchAgents: [createStoreAgent({ id: 'a1', name: 'researcher' })],
-        deepResearchToolCalls: [
-          createToolCall({
-            id: 't1',
-            name: 'database_query',
-            agentId: 'a1',
-            input: { question: 'top customers by revenue' },
-            output: 'Query (1 attempt(s)):\nSELECT customer_id FROM customers\n\nrows...',
-          }),
+        deepResearchAgents: [
+          createStoreAgent({ id: '1', name: 'planner-agent' }),
+          createStoreAgent({ id: '2', name: 'researcher-agent' }),
         ],
       })
 
       render(<AgentsTab />)
 
-      expect(screen.getByText('top customers by revenue')).toBeInTheDocument()
+      expect(screen.getByText('planner-agent')).toBeInTheDocument()
+      expect(screen.getByText('researcher-agent')).toBeInTheDocument()
     })
 
-    test('counts orphan tool-call groups when there are no agents', () => {
+    test('renders correct number of agent cards', () => {
       useChatStore.setState({
-        deepResearchToolCalls: [
-          createToolCall({ id: 't1', name: 'database_query', input: { question: 'count of orders' } }),
-          createToolCall({ id: 't2', name: 'database_query', input: { question: 'top customers' } }),
+        deepResearchAgents: [
+          createStoreAgent({ id: '1' }),
+          createStoreAgent({ id: '2' }),
+          createStoreAgent({ id: '3' }),
         ],
       })
 
       render(<AgentsTab />)
 
-      expect(screen.getByText('2')).toBeInTheDocument()
+      expect(screen.getAllByTestId('agent-card')).toHaveLength(3)
     })
 
-    test('counts a running orphan tool call toward the running header', () => {
+    test('groups tool calls by agent', () => {
       useChatStore.setState({
+        deepResearchAgents: [createStoreAgent({ id: 'agent-1', name: 'researcher-agent' })],
         deepResearchToolCalls: [
-          createToolCall({
-            id: 't1',
-            name: 'database_query',
-            status: 'running',
-            input: { question: 'count of orders' },
-          }),
+          createToolCall({ id: 'tool-1', name: 'web_search', agentId: 'agent-1' }),
+          createToolCall({ id: 'tool-2', name: 'tavily_search', agentId: 'agent-1' }),
         ],
       })
 
       render(<AgentsTab />)
 
-      expect(screen.getByText('1 running')).toBeInTheDocument()
+      expect(screen.getByText('researcher-agent')).toBeInTheDocument()
+      expect(screen.getAllByTestId('tool-call')).toHaveLength(2)
     })
 
-    test('renders a tool call with no owning agent', () => {
+    test('keeps concurrent researcher tool calls on their owning cards', () => {
       useChatStore.setState({
+        deepResearchAgents: [
+          createStoreAgent({ id: 'researcher-1', name: 'researcher-agent' }),
+          createStoreAgent({ id: 'researcher-2', name: 'researcher-agent' }),
+        ],
         deepResearchToolCalls: [
-          createToolCall({
-            id: 't1',
-            name: 'database_query',
-            input: { question: 'count of orders' },
-            output: 'Query (1 attempt(s)):\nSELECT count(*) FROM orders\n\n',
-          }),
+          createToolCall({ id: 'tool-1', name: 'web_search', agentId: 'researcher-1' }),
+          createToolCall({ id: 'tool-2', name: 'tavily_search', agentId: 'researcher-2' }),
         ],
       })
 
       render(<AgentsTab />)
 
-      expect(screen.getByText('count of orders')).toBeInTheDocument()
+      const cards = screen.getAllByTestId('agent-card')
+      expect(cards).toHaveLength(2)
+      expect(within(cards[0]).getByText('web_search')).toBeInTheDocument()
+      expect(within(cards[0]).queryByText('tavily_search')).not.toBeInTheDocument()
+      expect(within(cards[1]).getByText('tavily_search')).toBeInTheDocument()
+      expect(within(cards[1]).queryByText('web_search')).not.toBeInTheDocument()
+    })
+
+    test('ignores orphaned tool calls without agentId', () => {
+      useChatStore.setState({
+        deepResearchAgents: [createStoreAgent({ id: 'agent-1', name: 'researcher-agent' })],
+        deepResearchToolCalls: [
+          createToolCall({ id: 'tool-1', name: 'web_search', agentId: 'agent-1' }),
+          createToolCall({ id: 'tool-2', name: 'write_todos', agentId: undefined }),
+        ],
+      })
+
+      render(<AgentsTab />)
+
+      expect(screen.getByText('researcher-agent')).toBeInTheDocument()
+      expect(screen.getAllByTestId('tool-call')).toHaveLength(1)
     })
   })
 })

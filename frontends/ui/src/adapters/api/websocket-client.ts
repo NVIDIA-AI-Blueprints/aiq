@@ -228,15 +228,13 @@ export class NATWebSocketClient {
   sendMessage = (
     content: string,
     enabledDataSources?: string[],
-    activeReportJobId?: string,
-    selectedModel?: string
+    activeReportJobId?: string
   ): string | null => {
     // Format the text content as JSON with query and data_sources
     const textContent = JSON.stringify({
       query: content,
       data_sources: enabledDataSources ?? [],
       ...(activeReportJobId ? { active_report_job_id: activeReportJobId } : {}),
-      ...(selectedModel ? { model: selectedModel } : {}),
     })
 
     const messageId = this.generateMessageId()
