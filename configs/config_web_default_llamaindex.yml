@@ -172,13 +172,25 @@ functions:
   # Knowledge Retrieval (see sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)
   knowledge_search:
     _type: knowledge_retrieval
-    backend: llamaindex
-    collection_name: ${COLLECTION_NAME:-test_collection}
-    generate_summary: true
-    summary_model: summary_llm                     # Required when generate_summary: true
-    summary_db: ${AIQ_SUMMARY_DB:-sqlite+aiosqlite:///./summaries.db}
+    backend: nemo_retriever_local
+    collection_name: ${COLLECTION_NAME:-aiq-nrl-local}
     top_k: 5
-    chroma_dir: ${AIQ_CHROMA_DIR:-/tmp/chroma_data}
+    generate_summary: false
+    backend_config:
+      scope: ${NRL_SCOPE:-local}
+      data_dir: ${NRL_LOCAL_DATA_DIR:-.aiq-data/nemo_retriever}
+      profile: ${NRL_LOCAL_PROFILE:-auto}
+      # Leave URL overrides empty for NRL's hosted defaults; set them for compatible external or self-hosted NIMs.
+      page_elements_invoke_url: ${NRL_PAGE_ELEMENTS_INVOKE_URL:-}
+      ocr_invoke_url: ${NRL_OCR_INVOKE_URL:-}
+      table_structure_invoke_url: ${NRL_TABLE_STRUCTURE_INVOKE_URL:-}
+      embed_invoke_url: ${NRL_EMBED_INVOKE_URL:-}
+      embed_model_name: ${NRL_EMBED_MODEL_NAME:-}
+      embed_model_provider_prefix: ${NRL_EMBED_MODEL_PROVIDER_PREFIX:-}
+      # Hosted defaults accept an NVIDIA Build nvapi key. Leave unset to reuse NVIDIA_API_KEY,
+      # or set NRL_INFERENCE_API_KEY to the same or a separate Build key.
+      # inference_api_key: ${NRL_INFERENCE_API_KEY:-}
+      collection_ttl_hours: ${NRL_COLLECTION_TTL_HOURS:-24}
 
   # Paper Search (optional - requires SERPER_API_KEY)
   # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.

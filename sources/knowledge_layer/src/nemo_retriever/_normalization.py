@@ -128,6 +128,8 @@ def normalize_query_hit(raw_result: Any) -> Chunk:
     content_type = normalize_content_type(hit.content_type)
     page_number = hit.page_number
     citation = f"{hit.filename}, p.{page_number}" if page_number else hit.filename
+    if hit.filename.lower().endswith(".xlsx") and metadata.get("sheet_name") and metadata.get("cell_range"):
+        citation = f"{hit.filename}, sheet {metadata['sheet_name']!r}, cells {metadata['cell_range']}"
     image_storage_uri = hit.stored_image_uri or None
     image_url = _http_url(image_storage_uri)
     if image_url is None and content_type == ContentType.IMAGE:

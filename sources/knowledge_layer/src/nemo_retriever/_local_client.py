@@ -843,6 +843,8 @@ class LocalRuntime:
             self._active_writes.discard((work.collection_name, work.staged.document_id))
 
     def _extract_and_embed(self, staged: _StagedFile) -> Any:
+        if staged.path.suffix.lower() == ".xlsx":
+            return self._embed_excel(staged)
         inference_api_key = _secret_value(self._inference_api_key)
         plan = self.bindings.resolve_ingest_plan(
             self.bindings.IngestPlanRequest(
@@ -876,6 +878,41 @@ class LocalRuntime:
             .embed(plan.embed_params)
             .ingest()
         )
+
+    def _embed_excel(self, staged: _StagedFile) -> Any:
+        """Embed native spreadsheet chunks with the same NeMo client used for queries."""
+        from ._excel import read_excel_chunks
+
+        chunks = read_excel_chunks(staged.path)
+        records = []
+        batch_size = 32
+        for start in range(0, len(chunks), batch_size):
+            batch = chunks[start : start + batch_size]
+            vectors = self.bindings.infer_microservice(
+                [chunk.text for chunk in batch],
+                model_name=self._embedding_model,
+                embedding_endpoint=self._embedding_endpoint,
+                nvidia_api_key=_secret_value(self._inference_api_key),
+                input_type="passage",
+                truncate="NONE",
+                model_provider_prefix=self.settings.embed_model_provider_prefix,
+                grpc=False,
+            )
+            if len(vectors) != len(batch):
+                raise NemoRetrieverLocalError("NeMo Retriever returned an unexpected number of Excel embeddings")
+            for chunk, vector in zip(batch, vectors, strict=True):
+                records.append(
+                    {
+                        "text": chunk.text,
+                        "_content_type": "table",
+                        "metadata": {
+                            "embedding": vector,
+                            "source_metadata": {"source_id": staged.filename, "source_name": staged.filename},
+                            "content_metadata": chunk.metadata,
+                        },
+                    }
+                )
+        return self.bindings.pandas.DataFrame(records)
 
     def _apply_file_metadata(self, dataframe: Any, staged: _StagedFile) -> Any:
         if not staged.metadata:

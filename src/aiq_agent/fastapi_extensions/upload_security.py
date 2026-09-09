@@ -41,12 +41,14 @@ UPLOAD_ENDPOINT_DESCRIPTION = (
 _OFFICE_REQUIRED_MEMBERS = {
     ".docx": "word/document.xml",
     ".pptx": "ppt/presentation.xml",
+    ".xlsx": "xl/workbook.xml",
 }
 
 _DECLARED_CONTENT_TYPES: dict[str, frozenset[str]] = {
     ".pdf": frozenset({"application/pdf"}),
     ".docx": frozenset({"application/vnd.openxmlformats-officedocument.wordprocessingml.document"}),
     ".pptx": frozenset({"application/vnd.openxmlformats-officedocument.presentationml.presentation"}),
+    ".xlsx": frozenset({"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}),
     ".txt": frozenset({"text/plain"}),
     ".md": frozenset({"text/markdown", "text/x-markdown", "text/plain"}),
     ".html": frozenset({"text/html"}),
@@ -539,10 +541,7 @@ def _validate_file_content(path: str, extension: str) -> None:
         if b"%PDF-" not in header[:1024]:
             raise UploadValidationError(415, "PDF content does not match its filename extension")
         return
-    if extension == ".docx":
-        _validate_office_archive(path, extension=extension)
-        return
-    if extension == ".pptx":
+    if extension in _OFFICE_REQUIRED_MEMBERS:
         _validate_office_archive(path, extension=extension)
         return
     if extension == ".png":

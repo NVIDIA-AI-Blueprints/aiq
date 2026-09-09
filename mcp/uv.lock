@@ -1266,6 +1266,15 @@ wheels = [
 ]
 
 [[package]]
+name = "et-xmlfile"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54", size = 17234, upload-time = "2024-10-25T17:25:40.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
+]
+
+[[package]]
 name = "events"
 version = "0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -2167,6 +2176,7 @@ all = [
     { name = "llama-index-readers-file" },
     { name = "llama-index-vector-stores-chroma" },
     { name = "openai" },
+    { name = "openpyxl" },
     { name = "opensearch-py" },
     { name = "pdfplumber" },
     { name = "pillow" },
@@ -2189,7 +2199,7 @@ requires-dist = [
     { name = "docx2txt", marker = "extra == 'llamaindex'", specifier = ">=0.8" },
     { name = "docx2txt", marker = "extra == 'opensearch'", specifier = ">=0.8" },
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "knowledge-layer", extras = ["llamaindex", "foundational-rag", "opensearch", "azure-ai-search"], marker = "extra == 'all'", editable = "../sources/knowledge_layer" },
+    { name = "knowledge-layer", extras = ["llamaindex", "foundational-rag", "opensearch", "azure-ai-search", "excel"], marker = "extra == 'all'", editable = "../sources/knowledge_layer" },
     { name = "llama-index", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "llama-index-core", marker = "extra == 'azure-ai-search'", specifier = ">=0.11.0" },
     { name = "llama-index-embeddings-nvidia", marker = "extra == 'azure-ai-search'", specifier = ">=0.2.0" },
@@ -2198,6 +2208,7 @@ requires-dist = [
     { name = "llama-index-vector-stores-chroma", marker = "extra == 'llamaindex'", specifier = ">=0.1.0" },
     { name = "openai", marker = "extra == 'llamaindex'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'opensearch'", specifier = ">=1.0.0" },
+    { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1.5,<4" },
     { name = "opensearch-py", marker = "extra == 'opensearch'", specifier = ">=2.4.0" },
     { name = "pdfplumber", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "pillow", marker = "extra == 'llamaindex'", specifier = ">=9.0.0" },
@@ -2211,7 +2222,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'foundational-rag'", specifier = ">=2.28.0" },
     { name = "urllib3", marker = "extra == 'foundational-rag'", specifier = ">=2.7.0,<3" },
 ]
-provides-extras = ["llamaindex", "foundational-rag", "opensearch", "azure-ai-search", "all"]
+provides-extras = ["excel", "llamaindex", "foundational-rag", "opensearch", "azure-ai-search", "all"]
 
 [[package]]
 name = "kubernetes"
@@ -3814,6 +3825,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/2c/51/8ba1182ee86fc79793d5ff2d11e7fdcda10ded2d01f3e46ca6fcf0568213/openinference_semantic_conventions-0.1.30.tar.gz", hash = "sha256:81fece76e09c83789e35c393b8b30523481eeabf1008745b955631a53e3221d9", size = 13391, upload-time = "2026-05-22T21:10:44.065Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/76/5b7e78cf0de38589b821bbe8e9c29c59a6e76edfb980488d0854cbb90f7c/openinference_semantic_conventions-0.1.30-py3-none-any.whl", hash = "sha256:36d946d3f95f699b7c4b12324ae9c1f02d6c7750df11eece56aa159cff430b3d", size = 10911, upload-time = "2026-05-22T21:10:43.04Z" },
+]
+
+[[package]]
+name = "openpyxl"
+version = "3.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "et-xmlfile" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", size = 186464, upload-time = "2024-06-28T14:03:44.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", size = 250910, upload-time = "2024-06-28T14:03:41.161Z" },
 ]
 
 [[package]]

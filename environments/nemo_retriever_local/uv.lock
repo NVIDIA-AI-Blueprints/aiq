@@ -308,7 +308,7 @@ dependencies = [
     { name = "aiq-agent" },
     { name = "aiq-api" },
     { name = "filelock" },
-    { name = "knowledge-layer" },
+    { name = "knowledge-layer", extra = ["excel"] },
     { name = "nemo-retriever" },
     { name = "tavily-web-search" },
 ]
@@ -324,7 +324,7 @@ requires-dist = [
     { name = "aiq-agent", editable = "../../" },
     { name = "aiq-api", editable = "../../frontends/aiq_api" },
     { name = "filelock", specifier = ">=3.20.3,<4" },
-    { name = "knowledge-layer", editable = "../../sources/knowledge_layer" },
+    { name = "knowledge-layer", extras = ["excel"], editable = "../../sources/knowledge_layer" },
     { name = "nemo-retriever", git = "https://github.com/NVIDIA/NeMo-Retriever.git?subdirectory=nemo_retriever&rev=c80f4a5189ee10b98cbdb93e2f853ceb7b699c3b" },
     { name = "tavily-web-search", editable = "../../sources/tavily_web_search" },
 ]
@@ -1150,6 +1150,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
+]
+
+[[package]]
+name = "et-xmlfile"
+version = "2.0.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d3/38/af70d7ab1ae9d4da450eeec1fa3918940a5fafb9055e934af8d6eb0c2313/et_xmlfile-2.0.0.tar.gz", hash = "sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54", size = 17234, upload-time = "2024-10-25T17:25:40.039Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c1/8b/5fe2cc11fee489817272089c4203e679c63b570a5aaeb18d852ae3cbba6a/et_xmlfile-2.0.0-py3-none-any.whl", hash = "sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa", size = 18059, upload-time = "2024-10-25T17:25:39.051Z" },
 ]
 
 [[package]]
@@ -2050,6 +2059,7 @@ all = [
     { name = "llama-index-readers-file" },
     { name = "llama-index-vector-stores-chroma" },
     { name = "openai" },
+    { name = "openpyxl" },
     { name = "opensearch-py" },
     { name = "pdfplumber" },
     { name = "pillow" },
@@ -2058,6 +2068,9 @@ all = [
     { name = "python-pptx" },
     { name = "requests" },
     { name = "urllib3" },
+]
+excel = [
+    { name = "openpyxl" },
 ]
 
 [package.metadata]
@@ -2072,7 +2085,7 @@ requires-dist = [
     { name = "docx2txt", marker = "extra == 'llamaindex'", specifier = ">=0.8" },
     { name = "docx2txt", marker = "extra == 'opensearch'", specifier = ">=0.8" },
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "knowledge-layer", extras = ["llamaindex", "foundational-rag", "opensearch", "azure-ai-search"], marker = "extra == 'all'", editable = "../../sources/knowledge_layer" },
+    { name = "knowledge-layer", extras = ["llamaindex", "foundational-rag", "opensearch", "azure-ai-search", "excel"], marker = "extra == 'all'", editable = "../../sources/knowledge_layer" },
     { name = "llama-index", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "llama-index-core", marker = "extra == 'azure-ai-search'", specifier = ">=0.11.0" },
     { name = "llama-index-embeddings-nvidia", marker = "extra == 'azure-ai-search'", specifier = ">=0.2.0" },
@@ -2081,6 +2094,7 @@ requires-dist = [
     { name = "llama-index-vector-stores-chroma", marker = "extra == 'llamaindex'", specifier = ">=0.1.0" },
     { name = "openai", marker = "extra == 'llamaindex'", specifier = ">=1.0.0" },
     { name = "openai", marker = "extra == 'opensearch'", specifier = ">=1.0.0" },
+    { name = "openpyxl", marker = "extra == 'excel'", specifier = ">=3.1.5,<4" },
     { name = "opensearch-py", marker = "extra == 'opensearch'", specifier = ">=2.4.0" },
     { name = "pdfplumber", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "pillow", marker = "extra == 'llamaindex'", specifier = ">=9.0.0" },
@@ -2094,7 +2108,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'foundational-rag'", specifier = ">=2.28.0" },
     { name = "urllib3", marker = "extra == 'foundational-rag'", specifier = ">=2.7.0,<3" },
 ]
-provides-extras = ["llamaindex", "foundational-rag", "opensearch", "azure-ai-search", "all"]
+provides-extras = ["excel", "llamaindex", "foundational-rag", "opensearch", "azure-ai-search", "all"]
 
 [[package]]
 name = "kubernetes"
@@ -3121,7 +3135,7 @@ langgraph = [
 
 [[package]]
 name = "nemo-retriever"
-version = "2026.8.21.dev20260821180950"
+version = "2026.9.9.dev20260909084627"
 source = { git = "https://github.com/NVIDIA/NeMo-Retriever.git?subdirectory=nemo_retriever&rev=c80f4a5189ee10b98cbdb93e2f853ceb7b699c3b#c80f4a5189ee10b98cbdb93e2f853ceb7b699c3b" }
 dependencies = [
     { name = "backoff" },
@@ -3642,6 +3656,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/05/5e/13ffdb2ba436312cda9ed842ce3416fa5961e36a205df9a18a67eef7f9b3/openinference_semantic_conventions-0.1.32.tar.gz", hash = "sha256:2a3e6723ddce37abc5c43d38c6c7ac05b0f2efcfbe75cc0f135ab14ceb0730f7", size = 13980, upload-time = "2026-08-07T14:29:21.035Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/19/2d096333313d45e5f87d08f903cedc3f7298c5690d2e6c4ef236dc22870e/openinference_semantic_conventions-0.1.32-py3-none-any.whl", hash = "sha256:d06c4716faf7537fbabbb6d34e758ec6b3650a18c037661782fc8c3e9fa90f81", size = 11252, upload-time = "2026-08-07T14:29:19.78Z" },
+]
+
+[[package]]
+name = "openpyxl"
+version = "3.1.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "et-xmlfile" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/3d/f9/88d94a75de065ea32619465d2f77b29a0469500e99012523b91cc4141cd1/openpyxl-3.1.5.tar.gz", hash = "sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050", size = 186464, upload-time = "2024-06-28T14:03:44.161Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c0/da/977ded879c29cbd04de313843e76868e6e13408a94ed6b987245dc7c8506/openpyxl-3.1.5-py2.py3-none-any.whl", hash = "sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2", size = 250910, upload-time = "2024-06-28T14:03:41.161Z" },
 ]
 
 [[package]]
@@ -4414,15 +4440,15 @@ wheels = [
 
 [[package]]
 name = "pyopenssl"
-version = "26.4.0"
+version = "26.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cryptography" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/e8/7325d258199b159eb2c03fe32107533e2832e70e63f4fb88a6aa00023201/pyopenssl-26.4.0.tar.gz", hash = "sha256:28dfcce0162b9211413e26dfbfdf1d24317fbeba18fc93c12400a1856b2a0bc7", size = 182046, upload-time = "2026-08-01T19:50:50.512Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/51/27a5ad5f939d08f690a326ef9582cda7140555180db71695f6fb747d6a36/pyopenssl-26.2.0.tar.gz", hash = "sha256:8c6fcecd1183a7fc897548dfe388b0cdb7f37e018200d8409cf33959dbe35387", size = 182195, upload-time = "2026-05-04T23:06:09.72Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/51/ad/2cf6d3fa2fae5c79e1ed9960c0d42badd0f94d81dd12b50604cdc839e648/pyopenssl-26.4.0-py3-none-any.whl", hash = "sha256:f0eb0cb2d581d3ad2b9c489468485e7f2ab6727d08401bcf9d824c3caddf3c1c", size = 56026, upload-time = "2026-08-01T19:50:48.94Z" },
+    { url = "https://files.pythonhosted.org/packages/73/b8/a0e2790ae249d6f38c9f66de7a211621a7ab2650217bcd04e1262f578a56/pyopenssl-26.2.0-py3-none-any.whl", hash = "sha256:4f9d971bc5298b8bc1fab282803da04bf000c755d4ad9d99b52de2569ca19a70", size = 55823, upload-time = "2026-05-04T23:06:08.395Z" },
 ]
 
 [[package]]

@@ -42,6 +42,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+excel = [
+    "openpyxl>=3.1.5,<4",
+]
 llamaindex = [
     "llama-index>=0.10.0",
     "llama-index-embeddings-nvidia>=0.1.0",
@@ -78,7 +81,7 @@ azure_ai_search = [
     "pypdf>=4.0.0",
 ]
 all = [
-    "knowledge-layer[llamaindex,foundational_rag,opensearch,azure_ai_search]",
+    "knowledge-layer[llamaindex,foundational_rag,opensearch,azure_ai_search,excel]",
 ]
 
 [project.entry-points."nat.plugins"]
