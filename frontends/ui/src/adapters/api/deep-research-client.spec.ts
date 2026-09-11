@@ -107,6 +107,27 @@ describe('deep research REST client', () => {
     )
   })
 
+  test('normalizes object-valued workflow input', () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const onWorkflowStart = vi.fn()
+    const client = createDeepResearchClient({ jobId: 'job-1', callbacks: { onWorkflowStart } })
+    client.connect()
+
+    FakeEventSource.latest?.emit('workflow.start', {
+      id: 'event-1',
+      name: 'researcher',
+      data: { input: { query: 'revenue growth' } },
+      metadata: { agent_id: 'agent-1' },
+    })
+
+    expect(onWorkflowStart).toHaveBeenCalledWith(
+      'researcher',
+      '{"query":"revenue growth"}',
+      'event-1',
+      'agent-1'
+    )
+  })
+
   test('maps url-only artifacts (no artifact_id) via the content_url/url fallback', () => {
     vi.stubGlobal('EventSource', FakeEventSource)
     const onFileUpdate = vi.fn()

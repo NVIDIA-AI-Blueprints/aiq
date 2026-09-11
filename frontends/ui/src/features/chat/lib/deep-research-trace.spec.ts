@@ -206,6 +206,12 @@ describe('deepResearchToThinkingSteps', () => {
     expect(head?.argSummary).toBeUndefined()
   })
 
+  test('ignores non-string input from a persisted agent', () => {
+    const malformedInput = { query: 'revenue growth' } as unknown as string
+    const steps = deepResearchToThinkingSteps([agent({ input: malformedInput })], [])
+    expect(steps[0].argSummary).toBeUndefined()
+  })
+
   test('an agent whose input is a short clean task keeps it as the arg summary', () => {
     const steps = deepResearchToThinkingSteps(
       [agent({ id: 'a1', name: 'researcher', input: 'Research NVDA 5-year stock growth' })],

@@ -444,8 +444,10 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
 
       case 'workflow.start': {
         // workflow events have nested structure: { id, name, timestamp, data: { input }, metadata: { agent_id } }
-        const workflowData = rawData as { id?: string; name: string; data?: { input?: string }; metadata?: { agent_id?: string } }
-        callbacks.onWorkflowStart?.(workflowData.name, workflowData.data?.input, workflowData.id, workflowData.metadata?.agent_id)
+        const workflowData = rawData as { id?: string; name: string; data?: { input?: unknown }; metadata?: { agent_id?: string } }
+        const rawInput = workflowData.data?.input
+        const input = typeof rawInput === 'string' ? rawInput : rawInput == null ? undefined : JSON.stringify(rawInput)
+        callbacks.onWorkflowStart?.(workflowData.name, input, workflowData.id, workflowData.metadata?.agent_id)
         break
       }
 

@@ -115,7 +115,7 @@ export const deepResearchToThinkingSteps = (
   const agentIds = new Set(agents.map((a) => a.id))
 
   for (const agent of orderedAgents) {
-    const input = (agent.input ?? '').trim()
+    const input = typeof agent.input === 'string' ? agent.input.trim() : ''
     steps.push({
       id: agent.id,
       userMessageId: '',
