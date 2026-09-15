@@ -633,7 +633,12 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
 
-    async def _run_impl(query: object, nat_context_conversation_id: str) -> ChatResearcherResponse:
+    async def _run_impl(  # DEBUG REMOVE BEFORE PUSING
+        query: object,  # DEBUG REMOVE BEFORE PUSING
+        nat_context_conversation_id: str,  # DEBUG REMOVE BEFORE PUSING
+        *,  # DEBUG REMOVE BEFORE PUSING
+        stateless: bool = False,  # DEBUG REMOVE BEFORE PUSING
+    ) -> ChatResearcherResponse:  # DEBUG REMOVE BEFORE PUSING
         import os
         import sys
 
@@ -744,12 +749,14 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         # completed report in this conversation (server-side, so any client gets follow-up).
         _ctx = Context.get()
         client_conversation_id = _ctx.conversation_id if _ctx else None
-        effective_report_job_id = await _resolve_effective_report_job_id(
-            request_context.active_report_job_id,
-            client_conversation_id,
-            principal,
-            is_input_mode="--input" in sys.argv,
-        )
+        effective_report_job_id = None  # DEBUG REMOVE BEFORE PUSING
+        if not stateless:  # DEBUG REMOVE BEFORE PUSING
+            effective_report_job_id = await _resolve_effective_report_job_id(  # DEBUG REMOVE BEFORE PUSING
+                request_context.active_report_job_id,  # DEBUG REMOVE BEFORE PUSING
+                client_conversation_id,  # DEBUG REMOVE BEFORE PUSING
+                principal,  # DEBUG REMOVE BEFORE PUSING
+                is_input_mode="--input" in sys.argv,  # DEBUG REMOVE BEFORE PUSING
+            )  # DEBUG REMOVE BEFORE PUSING
         if effective_report_job_id and not request_context.active_report_job_id:
             logger.info(
                 "Defaulting report follow-up to report_ref=%s",
@@ -794,16 +801,36 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         import sys
         import uuid
 
+        from nat.builder.context import ContextState  # DEBUG REMOVE BEFORE PUSING
+
         context = Context.get()
+        metadata = context.metadata  # DEBUG REMOVE BEFORE PUSING
+        headers = metadata.headers if metadata and metadata.headers else {}  # DEBUG REMOVE BEFORE PUSING
+        headers = {name.lower(): value for name, value in headers.items()}  # DEBUG REMOVE BEFORE PUSING
+        stateless = headers.get("x-aiq-stateless", "").strip().lower() == "true"  # DEBUG REMOVE BEFORE PUSING
         nat_context_conversation_id = (
             str(uuid.uuid4()) if "--input" in sys.argv or not context.conversation_id else context.conversation_id
         )
+        if stateless:  # DEBUG REMOVE BEFORE PUSING
+            nat_context_conversation_id = str(uuid.uuid4())  # DEBUG REMOVE BEFORE PUSING
 
-        return await run_workflow(
-            workflow_id,
-            lambda: _run_impl(query, nat_context_conversation_id),
-            session_id=nat_context_conversation_id,
-            input_value=query,
-        )
+        conversation_var = ContextState.get().conversation_id  # DEBUG REMOVE BEFORE PUSING
+        collection_token = None  # DEBUG REMOVE BEFORE PUSING
+        if stateless and headers.get("conversation-id"):  # DEBUG REMOVE BEFORE PUSING
+            collection_token = conversation_var.set(headers["conversation-id"])  # DEBUG REMOVE BEFORE PUSING
+        try:  # DEBUG REMOVE BEFORE PUSING
+            return await run_workflow(  # DEBUG REMOVE BEFORE PUSING
+                workflow_id,  # DEBUG REMOVE BEFORE PUSING
+                lambda: _run_impl(  # DEBUG REMOVE BEFORE PUSING
+                    query,  # DEBUG REMOVE BEFORE PUSING
+                    nat_context_conversation_id,  # DEBUG REMOVE BEFORE PUSING
+                    stateless=stateless,  # DEBUG REMOVE BEFORE PUSING
+                ),  # DEBUG REMOVE BEFORE PUSING
+                session_id=nat_context_conversation_id,  # DEBUG REMOVE BEFORE PUSING
+                input_value=query,  # DEBUG REMOVE BEFORE PUSING
+            )  # DEBUG REMOVE BEFORE PUSING
+        finally:  # DEBUG REMOVE BEFORE PUSING
+            if collection_token is not None:  # DEBUG REMOVE BEFORE PUSING
+                conversation_var.reset(collection_token)  # DEBUG REMOVE BEFORE PUSING
 
     yield FunctionInfo.from_fn(_run, description="Chat deep researcher with intent routing and escalation.")
