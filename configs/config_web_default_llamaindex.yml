@@ -14,6 +14,8 @@ general:
   front_end:
     _type: aiq_api
     runner_class: aiq_api.plugin.AIQAPIWorker
+    # Embedded NeMo Retriever holds a process-wide data directory lock.
+    dask_workers: threads
     # =========================================================================
     # Knowledge API is automatically enabled when knowledge_retrieval function
     # is configured
@@ -65,6 +67,9 @@ llms:
     # top_p: 0.7
     max_tokens: 32768
     num_retries: 5
+    # Large prompts can exceed the client's 60s default read timeout before the
+    # first byte arrives.
+    timeout: 600
     parallel_tool_calls: false
     # chat_template_kwargs:
     #   enable_thinking: true
@@ -78,6 +83,7 @@ llms:
     # top_p: 0.7
     max_tokens: 16384
     num_retries: 5
+    timeout: 600
     # chat_template_kwargs:
     #   enable_thinking: false
 
@@ -90,6 +96,7 @@ llms:
     # top_p: 0.7
     max_tokens: 32768
     num_retries: 5
+    timeout: 600
     # chat_template_kwargs:
     #   enable_thinking: false
 
@@ -233,6 +240,7 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     enable_citation_verification: true
+    max_research_concurrency: 2
     orchestrator_llm: nemotron_ultra_llm
     source_router_llm: nemotron_ultra_llm
     researcher_llm: nemotron_ultra_llm
