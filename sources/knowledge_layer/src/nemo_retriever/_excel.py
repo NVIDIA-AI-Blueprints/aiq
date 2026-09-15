@@ -13,6 +13,7 @@ from datetime import date
 from datetime import datetime
 from datetime import time
 from datetime import timedelta
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -21,9 +22,18 @@ from openpyxl.utils import get_column_letter
 from openpyxl.utils import range_boundaries
 from openpyxl.worksheet.worksheet import Worksheet
 
-MAX_CHUNK_CHARS = 6000
+MAX_CHUNK_TOKENS = 3000
 _MAX_SHEET_CELLS = 2_000_000
 _SHEET_CONTEXT_ROWS = 8
+_TOKEN_PATTERN = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+
+
+def estimate_token_count(text: str) -> int:
+    """Conservatively estimate BPE tokens without downloading a model tokenizer."""
+    count = text.count("\n")
+    for token in _TOKEN_PATTERN.findall(text):
+        count += max(1, ceil(len(token.encode("utf-8")) / 3)) if token[0].isalnum() or token[0] == "_" else 1
+    return count
 
 
 @dataclass(frozen=True)
@@ -178,17 +188,18 @@ def _table_chunks(
         )
 
     batch: list[int] = []
-    size = len(prefix)
+    prefix_tokens = estimate_token_count(prefix)
+    size = prefix_tokens
     for row in range(top, bottom + 1):
-        row_size = 0 if row in repeated else len(line(row)) + 1
-        if len(prefix) + row_size > MAX_CHUNK_CHARS:
+        row_size = 0 if row in repeated else estimate_token_count(line(row)) + 1
+        if prefix_tokens + row_size > MAX_CHUNK_TOKENS:
             raise ValueError(
-                f"Excel sheet {sheet.title!r}, row {row} is too wide or contains too much text to index intact"
+                f"Excel sheet {sheet.title!r}, row {row} exceeds the {MAX_CHUNK_TOKENS}-token indexing budget"
             )
-        if batch and size + row_size > MAX_CHUNK_CHARS:
+        if batch and size + row_size > MAX_CHUNK_TOKENS:
             yield chunk(batch)
             batch = []
-            size = len(prefix)
+            size = prefix_tokens
         batch.append(row)
         size += row_size
     if batch:
