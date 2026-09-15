@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 from urllib.parse import urlparse
 
@@ -112,6 +113,13 @@ def _http_url(value: Any) -> str | None:
     return value if parsed.scheme in {"http", "https"} and parsed.netloc else None
 
 
+def _relevance_score(value: float | None) -> float:
+    """Map raw reranker logits to Chunk's nonnegative relevance-score range."""
+    if value is None:
+        return 0.0
+    return 1.0 / (1.0 + math.exp(-max(-709.0, min(value, 709.0))))
+
+
 def normalize_query_hit(raw_result: Any) -> Chunk:
     """Validate one NRL public query hit and preserve its native distance."""
     hit = raw_result if isinstance(raw_result, QueryHitWire) else QueryHitWire.model_validate(raw_result)
@@ -123,6 +131,7 @@ def normalize_query_hit(raw_result: Any) -> Chunk:
             "source": scrub_metadata(hit.source),
             "source_id": hit.source_id,
             "bounding_box": bounding_box,
+            "rerank_score": hit.rerank_score,
         }
     )
     content_type = normalize_content_type(hit.content_type)
@@ -135,7 +144,7 @@ def normalize_query_hit(raw_result: Any) -> Chunk:
     return Chunk(
         chunk_id=hit.chunk_id,
         content=hit.text or "",
-        score=0.0,
+        score=_relevance_score(hit.rerank_score),
         distance=hit.distance,
         file_name=hit.filename,
         page_number=page_number,

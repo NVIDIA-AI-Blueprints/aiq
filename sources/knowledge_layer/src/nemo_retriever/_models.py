@@ -150,6 +150,7 @@ class QueryHitWire(_WireModel):
     bbox: Any = None
     bbox_xyxy_norm: Any = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    rerank_score: float | None = Field(default=None, allow_inf_nan=False)
 
     @field_validator("page_number", mode="before")
     @classmethod

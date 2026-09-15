@@ -159,6 +159,11 @@ functions:
       max_queued_uploads: ${NRL_MAX_QUEUED_UPLOADS:-128}
       verify_ssl: ${NRL_VERIFY_SSL:-true}
       collection_ttl_hours: ${NRL_COLLECTION_TTL_HOURS:-24}
+      enable_nrl_rerank: ${ENABLE_NRL_RERANK:-true}
+      nrl_rerank_top_k: ${NRL_RERANK_TOP_K:-5}
+      nrl_rerank_url: ${NRL_RERANK_URL:-https://ai.api.nvidia.com/v1/retrieval/nvidia/llama-nemotron-rerank-vl-1b-v2/reranking}
+      nrl_rerank_model: ${NRL_RERANK_MODEL:-nvidia/llama-nemotron-rerank-vl-1b-v2}
+      nrl_rerank_allowed_hosts: ${NRL_RERANK_ALLOWED_HOSTS:-}
 
   # Paper Search (optional - requires SERPER_API_KEY)
   # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.
