@@ -65,6 +65,32 @@ const makeDeps = (hasUserMessage = true): { deps: ResearchCorrelatorDeps; calls:
 }
 
 describe('createResearchCorrelator', () => {
+  describe('structured workflow input and output', () => {
+    test('drops non-text input and output instead of passing objects through', () => {
+      const { deps, calls } = makeDeps()
+      const c = createResearchCorrelator(deps)
+
+      c.onWorkflowStart('deep-1', 'deep_research_agent', { messages: [], files: {}, todos: [] })
+      c.onWorkflowEnd('deep-1', 'deep_research_agent', { status: 'done' })
+
+      expect(calls.addAgent[0].agent.input).toBeUndefined()
+      expect(calls.addThinkingStep[0].step.content).toBe('Starting...\n')
+      expect(calls.completeAgent).toEqual([{ id: 'deep-1', output: undefined }])
+      expect(calls.appendToThinkingStep).toEqual([])
+    })
+
+    test('keeps text input and output unchanged', () => {
+      const { deps, calls } = makeDeps()
+      const c = createResearchCorrelator(deps)
+
+      c.onWorkflowStart('planner-1', 'planner-agent', 'Compare vLLM and SGLang')
+      c.onWorkflowEnd('planner-1', 'planner-agent', 'Plan ready')
+
+      expect(calls.addAgent[0].agent.input).toBe('Compare vLLM and SGLang')
+      expect(calls.completeAgent).toEqual([{ id: 'planner-1', output: 'Plan ready' }])
+    })
+  })
+
   describe('concurrent workers sharing a name', () => {
     test('two researcher-agent workers with distinct ids produce two independent rows', () => {
       const { deps, calls } = makeDeps()

@@ -14,6 +14,7 @@
  */
 
 import { getToolArgSummary } from '@/shared/components/research'
+import { toEventText } from './deep-research-correlation'
 import { EXPLANATION_FUNCTION_NAME } from './intermediate-step-parser'
 import type { DeepResearchAgent, DeepResearchToolCall, ThinkingStep } from '../types'
 
@@ -115,14 +116,15 @@ export const deepResearchToThinkingSteps = (
   const agentIds = new Set(agents.map((a) => a.id))
 
   for (const agent of orderedAgents) {
-    const input = (agent.input ?? '').trim()
+    // Sessions saved before input normalization can still hold structured values.
+    const input = (toEventText(agent.input) ?? '').trim()
     steps.push({
       id: agent.id,
       userMessageId: '',
       category: 'agents',
       functionName: agent.name,
       displayName: agent.name,
-      content: agent.output ?? '',
+      content: toEventText(agent.output) ?? '',
       timestamp: agent.startedAt,
       completedAt: agent.completedAt,
       isComplete: agent.status !== 'running',

@@ -26,6 +26,7 @@ import {
   getToolArgSummary,
   statusToNodeState,
 } from '@/shared/components/research'
+import { toEventText } from '@/features/chat/lib/deep-research-correlation'
 import type { DeepResearchToolCall } from '@/features/chat/types'
 
 /** Agent/workflow information from SSE events */
@@ -90,7 +91,7 @@ export const AgentCard: FC<AgentCardProps> = ({ agent, defaultExpanded = true })
   const toolCalls = dedupeToolCalls(agent.toolCalls || [])
   const completedToolCalls = toolCalls.filter((tc) => tc.status === 'complete').length
   const hasToolCalls = toolCalls.length > 0
-  const output = agent.output?.trim()
+  const output = toEventText(agent.output)?.trim()
   const hasExpandableContent = hasToolCalls || Boolean(agent.currentTask) || Boolean(output)
   const canExpand = hasExpandableContent
 

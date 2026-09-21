@@ -834,11 +834,14 @@ class AgentEventCallback(BaseCallbackHandler):
         if isinstance(inputs, dict):
             if "input" in inputs:
                 return inputs["input"]
-            if "messages" in inputs and inputs["messages"]:
-                msg = inputs["messages"][-1]
-                if hasattr(msg, "content"):
-                    return msg.content
-            return inputs
+            messages = inputs.get("messages")
+        else:
+            # Graph state can arrive as a model (e.g. DeepResearchAgentState), not a dict.
+            messages = getattr(inputs, "messages", None)
+        if messages:
+            msg = messages[-1]
+            if hasattr(msg, "content"):
+                return msg.content
         return inputs
 
     def _extract_output(self, outputs: Any) -> Any:

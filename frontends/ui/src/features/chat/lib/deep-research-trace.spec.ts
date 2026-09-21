@@ -23,6 +23,18 @@ const tool = (o: Partial<DeepResearchToolCall> = {}): DeepResearchToolCall => ({
 })
 
 describe('deepResearchToThinkingSteps', () => {
+  test('tolerates structured agent input and output saved before normalization', () => {
+    const legacy = agent({
+      input: { task: 'write report' } as unknown as string,
+      output: { status: 'done' } as unknown as string,
+    })
+
+    const steps = deepResearchToThinkingSteps([legacy], [])
+
+    expect(steps[0].content).toBe('')
+    expect(steps[0].argSummary).toBeUndefined()
+  })
+
   test('agents become top-level phase heads in start order, with input as the summary', () => {
     const steps = deepResearchToThinkingSteps(
       [

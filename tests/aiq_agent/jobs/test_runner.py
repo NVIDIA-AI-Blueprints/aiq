@@ -308,6 +308,33 @@ class TestDeepResearchEventCallback:
         assert call_args["type"] == "workflow.start"
         assert call_args["name"] == "planner-agent"
 
+    def test_extract_input_reads_last_message_from_model_state(self):
+        """Test _extract_input returns the last message text when the graph state is a model."""
+        from langchain_core.messages import HumanMessage
+        from pydantic import BaseModel
+
+        class _State(BaseModel):
+            messages: list[HumanMessage]
+            files: dict = {}
+
+        callback = DeepResearchEventCallback()
+
+        extracted = callback._extract_input(_State(messages=[HumanMessage("Compare vLLM and SGLang")]))
+
+        assert extracted == "Compare vLLM and SGLang"
+
+    def test_extract_input_keeps_model_state_without_messages(self):
+        """Test _extract_input falls back to the raw inputs when the model has no messages."""
+        from pydantic import BaseModel
+
+        class _State(BaseModel):
+            files: dict = {}
+
+        callback = DeepResearchEventCallback()
+        state = _State()
+
+        assert callback._extract_input(state) is state
+
     def test_on_chain_start_non_agent_chain_no_event(self):
         """Test on_chain_start does not emit for non-agent chains."""
         mock_store = MagicMock()

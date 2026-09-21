@@ -24,6 +24,13 @@ type NewToolCall = Omit<DeepResearchToolCall, 'id' | 'timestamp' | 'status'>
 type NewLLMStep = Omit<DeepResearchLLMStep, 'id' | 'timestamp' | 'isComplete'>
 type LLMUsage = { input_tokens: number; output_tokens: number }
 
+/**
+ * Workflow input/output arrive as the backend sent them (`EventData.input: Any`), which is
+ * not always a string. Only text is shown in the trace, so anything else is dropped here.
+ */
+export const toEventText = (value: unknown): string | undefined =>
+  typeof value === 'string' ? value : undefined
+
 export interface ResearchCorrelatorDeps {
   hasUserMessage: () => boolean
   addThinkingStep: (step: NewThinkingStep) => string
@@ -44,8 +51,8 @@ export interface AdoptedRun {
 }
 
 export interface ResearchCorrelator {
-  onWorkflowStart: (agentId: string | undefined, name: string, input?: string) => void
-  onWorkflowEnd: (agentId: string | undefined, name: string, output?: string) => void
+  onWorkflowStart: (agentId: string | undefined, name: string, input?: unknown) => void
+  onWorkflowEnd: (agentId: string | undefined, name: string, output?: unknown) => void
   onLLMStart: (agentId: string | undefined, name: string, workflow?: string) => void
   onLLMChunk: (chunk: string) => void
   onLLMEnd: (
@@ -123,7 +130,8 @@ export const createResearchCorrelator = (deps: ResearchCorrelatorDeps): Research
     if (index >= 0) llmOrder.splice(index, 1)
   }
 
-  const onWorkflowStart = (agentId: string | undefined, name: string, input?: string): void => {
+  const onWorkflowStart = (agentId: string | undefined, name: string, rawInput?: unknown): void => {
+    const input = toEventText(rawInput)
     const key = agentKeyOf(agentId)
     let thinkingStepId: string | undefined
     if (deps.hasUserMessage()) {
@@ -140,7 +148,8 @@ export const createResearchCorrelator = (deps: ResearchCorrelatorDeps): Research
     agentSteps.set(key, { thinkingStepId })
   }
 
-  const onWorkflowEnd = (agentId: string | undefined, name: string, output?: string): void => {
+  const onWorkflowEnd = (agentId: string | undefined, name: string, rawOutput?: unknown): void => {
+    const output = toEventText(rawOutput)
     const key = agentKeyOf(agentId)
     const tracked = agentSteps.get(key)
     if (tracked?.thinkingStepId) {
