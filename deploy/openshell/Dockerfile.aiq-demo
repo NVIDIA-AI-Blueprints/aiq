@@ -18,15 +18,24 @@ RUN apt-get update \
         bash \
         ca-certificates \
         curl \
+        gcc \
         iproute2 \
         iptables \
+        libreoffice-calc \
         procps \
-    && python -m pip install --no-cache-dir numpy pandas matplotlib pillow tabulate requests \
+    && python -m pip install --no-cache-dir numpy pandas matplotlib openpyxl pillow tabulate requests \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r sandbox \
     && useradd -r -g sandbox -d /sandbox -s /bin/bash sandbox \
     && mkdir -p /sandbox /workspace /tmp \
     && chown -R sandbox:sandbox /sandbox /workspace
+
+COPY --chown=sandbox:sandbox \
+    src/aiq_agent/agents/deep_researcher/skills/research/model-x-math/scripts \
+    /workspace/skills/model-x-math/scripts
+COPY --chown=sandbox:sandbox \
+    src/aiq_agent/agents/deep_researcher/skills/research/model-x-math/assets \
+    /workspace/skills/model-x-math/assets
 
 WORKDIR /workspace
 USER sandbox
