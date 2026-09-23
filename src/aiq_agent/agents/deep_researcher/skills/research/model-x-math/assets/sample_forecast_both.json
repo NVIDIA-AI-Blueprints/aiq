@@ -1,0 +1,26 @@
+{
+  "company": "Acme Packaging",
+  "start_year": 2022,
+  "n_hist": 4,
+  "n_forecast": 2,
+  "scenarios": ["management", "our"],
+  "scenario_default": 1,
+
+  "pnl": {
+    "revenue": [28053, 37993, 39967, 41763], "revenue_mgmt": [46176, 51042], "revenue_growth": [0.08, 0.08],
+    "ebitda":  [8168, 9747, 12552, 13750],   "ebitda_mgmt":  [15126, 16720], "ebitda_margin": [0.33, 0.335],
+    "da":      [1805, 1756, 2082, 2339],      "da_mgmt":      [3114, 3441],   "da_pct":        [0.05, 0.05]
+  },
+  "cf":    { "nwc": [842, 4167, 2158, 1360], "cash_eop": [918, 3465, 7221, 8215] },
+  "capex": { "total": [3106, 2778, 3689, 4104] },
+  "debt":  { "debt":  [25999, 28493, 26965, 26773] },
+
+  "assumptions": {
+    "interest_rate": { "value": 0.075, "rationale": "Assumed 7.5% cost of debt." },
+    "tax_rate":      { "value": 0.25,  "rationale": "Assumed 25% tax rate." },
+    "nwc_pct":       { "value": 0.03,  "rationale": "Our-case ΔNWC assumed 3% of revenue." },
+    "capex_pct":     { "value": 0.10,  "rationale": "Our-case capex assumed 10% of revenue." },
+    "maint_split":   { "value": 0.65,  "rationale": "65% maintenance / 35% growth." },
+    "repay_pct":     { "value": 0.0,   "rationale": "Debt held flat in the forecast." }
+  }
+}

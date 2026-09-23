@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import importlib.metadata
 import json
+import os
 import platform
 import re
 import shutil
@@ -21,6 +22,7 @@ from typing import Any
 from version_contract import load_contract
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_VENV_DIR = Path(os.environ.get("AIQ_VENV_DIR", _REPO_ROOT / ".venv")).expanduser()
 _VERSION_PATTERN = re.compile(r"\d+\.\d+\.\d+(?:(?:-dev\.|\.dev)\d+(?:\+g[0-9a-fA-F]+)?)?")
 _LOCAL_REMEDIATION = "./scripts/openshell/install_gateway.sh"
 _OFFICIAL_FORMULA = "nvidia/openshell/openshell"
@@ -138,7 +140,7 @@ def inspect_components(
         sdk_version = _extract_version(importlib.metadata.version("openshell"))
     except importlib.metadata.PackageNotFoundError:
         sdk_version = None
-    cli_path = _REPO_ROOT / ".venv" / "bin" / "openshell"
+    cli_path = _VENV_DIR / "bin" / "openshell"
     cli_version = _cli_version(cli_path)
     gateway_type = _gateway_type(cli_path, gateway_name)
     current_system = system or platform.system()

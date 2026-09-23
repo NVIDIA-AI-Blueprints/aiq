@@ -1,0 +1,42 @@
+{
+  "company": "Acme Packaging",
+  "units": "(in $m)",
+  "start_year": 2022,
+  "n_hist": 4,
+  "n_forecast": 5,
+
+  "deal": {
+    "entry_multiple": 10.0
+  },
+
+  "pnl": {
+    "revenue":        [311.7, 422.1, 444.1, 464.0],
+    "revenue_growth": [0.105, 0.105, 0.105, 0.10, 0.10],
+    "ebitda":         [90.8, 108.3, 139.5, 152.8],
+    "ebitda_margin":  [0.330, 0.330, 0.330, 0.335, 0.340],
+    "da":             [20.1, 19.5, 23.1, 26.0],
+    "da_pct":         [0.045, 0.045, 0.045, 0.045, 0.045],
+    "tax_rate":       0.25
+  },
+
+  "cf": {
+    "nwc_pct":       0.05,
+    "cash_eop_hist": [10.2, 38.5, 80.2, 91.3]
+  },
+
+  "capex": {
+    "capex_pct":   0.12,
+    "maint_split": 0.65
+  },
+
+  "debt": {
+    "repay_pct":     0.05,
+    "debt_hist":     [288.9, 316.6, 299.6, 297.5],
+    "interest_rate": 0.09
+  },
+
+  "dividends": {
+    "payout":    [0.5, 0.8, 0.8, 0.8, 0.8],
+    "spv_stake": 0.30
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "mode": "operating",
+  "company": "Acme Packaging",
+  "units": "(in $m)",
+  "start_year": 2022,
+  "n_hist": 4,
+
+  "pnl": {
+    "revenue":  [311.7, 422.1, 444.1, 464.0],
+    "ebitda":   [90.8, 108.3, 139.5, 152.8],
+    "da":       [20.1, 19.5, 23.1, 26.0],
+    "interest": [26.0, 26.0, 25.5, 25.0],
+    "tax":      [11.2, 15.7, 22.7, 25.4]
+  },
+
+  "cf": {
+    "nwc":       [-12.0, -46.3, -24.0, -15.1],
+    "cash_eop":  [10.2, 38.5, 80.2, 91.3]
+  },
+
+  "capex": {
+    "total": [34.5, 30.9, 41.0, 45.6]
+  },
+
+  "debt": {
+    "debt": [288.9, 316.6, 299.6, 297.5]
+  },
+
+  "assumptions": {
+    "maint_split": {
+      "value": 0.65,
+      "rationale": "Capex split not itemised in the accounts; assumed 65% maintenance / 35% growth, consistent with a mature packaging asset base."
+    }
+  }
+}

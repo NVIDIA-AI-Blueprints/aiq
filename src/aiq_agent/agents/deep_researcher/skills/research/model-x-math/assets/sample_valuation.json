@@ -1,0 +1,38 @@
+{
+  "mode": "operating",
+  "company": "Acme Packaging",
+  "units": "(in INR mn)",
+  "start_year": 2022,
+  "n_hist": 4,
+  "n_forecast": 5,
+
+  "currency": {
+    "source": "INR", "reporting": "USD", "unit": "m",
+    "rates": [76, 80, 83, 83, 84, 85, 86, 87, 88]
+  },
+
+  "pnl": {
+    "revenue": [28053, 37993, 39967, 41763], "revenue_growth": [0.105, 0.10, 0.10, 0.10, 0.10],
+    "ebitda":  [8168, 9747, 12552, 13750],   "ebitda_margin": [0.33, 0.335, 0.34, 0.34, 0.345],
+    "da":      [1805, 1756, 2082, 2339],      "da_pct":        [0.05, 0.05, 0.05, 0.05, 0.05]
+  },
+  "cf":    { "nwc": [842, 4167, 2158, 1360], "cash_eop": [918, 3465, 7221, 8215] },
+  "capex": { "total": [3106, 2778, 3689, 4104] },
+  "debt":  { "debt":  [25999, 28493, 26965, 26773] },
+
+  "deal": {
+    "entry_multiple": 10.0,
+    "spv_stake": 0.70,
+    "primary_injection": 0.0,
+    "payout": [0.5, 0.8, 0.8, 0.8, 0.8]
+  },
+
+  "assumptions": {
+    "interest_rate": { "value": 0.09,  "rationale": "9% blended cost of INR debt at entry." },
+    "tax_rate":      { "value": 0.25,  "rationale": "25% Indian corporate tax rate." },
+    "nwc_pct":       { "value": 0.05,  "rationale": "Forecast ΔNWC assumed 5% of revenue." },
+    "capex_pct":     { "value": 0.12,  "rationale": "Forecast capex assumed 12% of revenue." },
+    "maint_split":   { "value": 0.65,  "rationale": "65% maintenance / 35% growth." },
+    "repay_pct":     { "value": 0.05,  "rationale": "5% of opening debt repaid annually in the forecast." }
+  }
+}

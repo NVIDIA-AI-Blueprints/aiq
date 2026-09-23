@@ -1,0 +1,306 @@
+# This is the default configuration for the Web mode.
+# It has the following features:
+# - Knowledge retrieval using LlamaIndex
+# - Web search and Paper search tools by default
+
+general:
+  use_uvloop: true
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+
+  front_end:
+    _type: aiq_api
+    runner_class: aiq_api.plugin.AIQAPIWorker
+    # Embedded NeMo Retriever holds a process-wide data directory lock.
+    dask_workers: threads
+    # =========================================================================
+    # Knowledge API is automatically enabled when knowledge_retrieval function
+    # is configured
+    # =========================================================================
+    # Async Job API Settings
+    # =========================================================================
+    # Async job infrastructure database (NAT JobStore + EventStore)
+    # Used by: /v1/jobs/async routes, SSE streaming, job status persistence
+    # Requires async driver for SQLite (aiosqlite) or PostgreSQL (asyncpg)
+    # Environment overrides:
+    # - NAT_JOB_STORE_DB_URL (direct override)
+    # - NAT_JOB_STORE_DB_URL_DEV / NAT_JOB_STORE_DB_URL_PROD (via NAT_ENV)
+    db_url: ${NAT_JOB_STORE_DB_URL:-sqlite+aiosqlite:///./jobs.db}
+    # Job expiry - how long completed jobs stay in database before cleanup
+    expiry_seconds: 86400  # 24 hours (min: 600, max: 604800/7 days)
+    cors:
+      allow_origin_regex: 'http://localhost(:\d+)?|http://127.0.0.1(:\d+)?'
+      allow_methods:
+        - GET
+        - POST
+        - DELETE
+        - OPTIONS
+      allow_headers:
+        - "*"
+      allow_credentials: true
+      expose_headers:
+        - "*"
+
+llms:
+  nemotron_lightning_intent_llm:
+    _type: nim
+    model_name: nvidia/nvidia/nemotron-3.5-lightning
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
+    top_p: 0.9
+    max_tokens: 1024
+    num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
+
+  nemotron_lightning_agent_llm:
+    _type: nim
+    model_name: z-ai/glm-5.3
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key: ${NVIDIA_API_KEY}
+    # temperature: 0.2
+    # top_p: 0.7
+    max_tokens: 32768
+    num_retries: 5
+    # Large prompts can exceed the client's 60s default read timeout before the
+    # first byte arrives.
+    timeout: 600
+    parallel_tool_calls: false
+    # chat_template_kwargs:
+    #   enable_thinking: true
+
+  frontier_llm:
+    _type: nim
+    model_name: z-ai/glm-5.3
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    # temperature: 0.2
+    # top_p: 0.7
+    max_tokens: 16384
+    num_retries: 5
+    timeout: 600
+    # chat_template_kwargs:
+    #   enable_thinking: false
+
+  frontier_llm:
+    _type: nim
+    model_name: z-ai/glm-5.3
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key: ${NVIDIA_API_KEY}
+    # temperature: 0.2
+    # top_p: 0.7
+    max_tokens: 32768
+    num_retries: 5
+    timeout: 600
+    # chat_template_kwargs:
+    #   enable_thinking: false
+
+  # LLM for document summaries (required when generate_summary: true)
+  summary_llm:
+    _type: nim
+    model_name: z-ai/glm-5.3
+    base_url: https://integrate.api.nvidia.com/v1
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
+    max_tokens: 100
+
+functions:
+  # =========================================================================
+  # Data Source Registry
+  # =========================================================================
+  # Central registry that controls:
+  #   1. UI toggles — each source appears as an on/off switch in the frontend
+  #   2. Per-message filtering — users can select active sources per request
+  #   3. Tool auto-inheritance — agents with no explicit `tools` list receive
+  #      every tool listed here (use `exclude_tools` on agents to specialize)
+  #
+  # Adding a new tool or MCP function group? Just add it here — all agents
+  # pick it up automatically. No per-agent config changes needed.
+  #
+  # Source entry fields:
+  #   id            — Unique key used in API payloads and filtering
+  #   name          — Display name shown in the UI
+  #   description   — Human-readable description shown in the UI
+  #   tools         — List of NAT function names or function group names
+  #   requires_auth — (default: false) If true, the UI greys out this source
+  #                   until the user signs in. Use for sources that need
+  #                   user-level OAuth tokens (e.g., enterprise SSO).
+  #                   Sources using backend API keys (Tavily, Serper) should
+  #                   leave this false.
+  #   default_enabled — (default: true) Whether enabled by default
+  #
+  # See docs/source/customization/tools-and-sources.md for full details.
+  # =========================================================================
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: you_finance_research
+        name: "You.com Finance Research"
+        description: "Search the web cited research over financial filings, earnings, and market data."
+        tools:
+          - you_finance_research
+        default_enabled: true
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        description: "Search uploaded documents and files."
+        tools:
+          - knowledge_search
+      # Uncomment when paper_search_tool is enabled (requires SERPER_API_KEY)
+      # - id: paper_search
+      #   name: "Academic Papers"
+      #   description: "Search academic papers and scientific publications."
+      #   tools:
+      #     - paper_search_tool
+  you_finance_research:
+    _type: you_finance_research
+    research_effort: deep   # or exhaustive (can take up to ~300s)
+
+  web_search_tool:
+    _type: tavily_web_search
+    max_results: 5
+    max_content_length: 1000
+
+  advanced_web_search_tool:
+    _type: tavily_web_search
+    max_results: 2
+    advanced_search: true
+
+  # Knowledge Retrieval (see sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: nemo_retriever_local
+    collection_name: ${COLLECTION_NAME:-aiq-nrl-local}
+    top_k: 5
+    generate_summary: false
+    backend_config:
+      scope: ${NRL_SCOPE:-local}
+      data_dir: ${NRL_LOCAL_DATA_DIR:-.aiq-data/nemo_retriever}
+      profile: ${NRL_LOCAL_PROFILE:-auto}
+      # Leave URL overrides empty for NRL's hosted defaults; set them for compatible external or self-hosted NIMs.
+      page_elements_invoke_url: ${NRL_PAGE_ELEMENTS_INVOKE_URL:-}
+      ocr_invoke_url: ${NRL_OCR_INVOKE_URL:-}
+      table_structure_invoke_url: ${NRL_TABLE_STRUCTURE_INVOKE_URL:-}
+      embed_invoke_url: ${NRL_EMBED_INVOKE_URL:-}
+      embed_model_name: ${NRL_EMBED_MODEL_NAME:-}
+      embed_model_provider_prefix: ${NRL_EMBED_MODEL_PROVIDER_PREFIX:-}
+      # Hosted defaults accept an NVIDIA Build nvapi key. Leave unset to reuse NVIDIA_API_KEY,
+      # or set NRL_INFERENCE_API_KEY to the same or a separate Build key.
+      # inference_api_key: ${NRL_INFERENCE_API_KEY:-}
+      collection_ttl_hours: ${NRL_COLLECTION_TTL_HOURS:-24}
+
+  # Paper Search (optional - requires SERPER_API_KEY)
+  # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.
+  # paper_search_tool:
+  #   _type: paper_search
+  #   max_results: 5
+  #   serper_api_key: ${SERPER_API_KEY}
+
+  # =========================================================================
+  # Agents
+  # =========================================================================
+  # Tool inheritance: agents with no `tools` list inherit ALL tools from the
+  # data_source_registry above. Use `exclude_tools` to remove specific tools
+  # from an agent (e.g., give shallow the basic search, deep the advanced).
+  # To bypass auto-inherit entirely, set an explicit `tools` list.
+  # =========================================================================
+  intent_classifier:
+    _type: intent_classifier
+    llm: nemotron_lightning_intent_llm
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
+
+  clarifier_agent:
+    _type: clarifier_agent
+    llm: frontier_llm
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
+    max_turns: 3
+    log_response_max_chars: 2000
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: nemotron_lightning_agent_llm
+    # tools: omitted -> inherits all from data_source_registry
+    exclude_tools:                     # Remove advanced variant; shallow uses web_search_tool
+      - advanced_web_search_tool
+    max_llm_turns: 10
+    max_tool_iterations: 5
+
+  deep_research_skills:
+    _type: deep_research_skills
+    agents:
+      researcher-agent: [research]
+    require_sandbox:
+      - research
+
+  deep_research_sandbox:
+    _type: deep_research_sandbox
+    provider: openshell
+    gateway: ${AIQ_OPENSHELL_GATEWAY_NAME:-openshell}
+    openshell_image: ${AIQ_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}
+    workspace: ${AIQ_OPENSHELL_WORKSPACE:-default}
+    policy: ${AIQ_OPENSHELL_POLICY_FILE:-configs/openshell/generated/aiq-openshell-policy.yaml}
+    workdir: /workspace
+    network: blocked
+    timeout: 1200
+    idle_timeout: 1800
+    policy_load_timeout_seconds: 30
+    delete_on_exit: true
+    attest: true
+    require_hard_landlock: true
+    artifact_capture:
+      enabled: true
+      max_file_bytes: 50000000
+      allow_extensions: [.png, .jpg, .jpeg, .webp, .svg, .csv, .json, .md, .ipynb, .pdf, .xlsx]
+
+  deep_research_agent:
+    _type: deep_research_agent
+    enable_citation_verification: true
+    max_research_concurrency: 2
+    resource_limits:
+      max_execution_seconds: 7200
+    orchestrator_llm: frontier_llm
+    source_router_llm: frontier_llm
+    researcher_llm: frontier_llm
+    planner_llm: frontier_llm
+    writer_llm: frontier_llm
+    # tools: omitted -> inherits all from data_source_registry
+    exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
+      - web_search_tool
+    skills: deep_research_skills
+    sandbox: deep_research_sandbox
+
+workflow:
+  _type: chat_deepresearcher_agent
+  enable_escalation: true
+  enable_clarifier: true
+  use_async_deep_research: true
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
+  relay:
+    observability:
+      atof:
+        enabled: true
+        output_directory: ./relay
+        filename: aiq-relay.atof.jsonl
+        mode: append
+      # Uncomment to export Relay traces to a local Phoenix instance.
+      opentelemetry:
+        enabled: true
+        endpoints:
+          - type: openinference
+            endpoint: http://localhost:6006/v1/traces
+            service_name: aiq-relay
+            resource_attributes:
+              openinference.project.name: aiq-relay
+              deployment.environment: development

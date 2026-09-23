@@ -8,7 +8,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VENV_DIR="$REPO_ROOT/.venv"
+VENV_DIR="${AIQ_VENV_DIR:-$REPO_ROOT/.venv}"
 
 GATEWAY_NAME="${AIQ_OPENSHELL_GATEWAY_NAME:-openshell}"
 WORKSPACE_NAME="${AIQ_OPENSHELL_WORKSPACE:-default}"

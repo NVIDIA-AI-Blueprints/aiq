@@ -1,0 +1,31 @@
+{
+  "company": "Acme Packaging",
+  "units": "(in INR mn)",
+  "start_year": 2022,
+  "n_hist": 4,
+  "n_forecast": 2,
+
+  "currency": {
+    "source": "INR", "reporting": "USD", "unit": "m",
+    "rates": [76, 80, 83, 83, 84, 85],
+    "rationale": "Source data in INR mn; display in USD m at per-period rates (source per USD). Forecast years FY26E/FY27E carry their own assumed rates."
+  },
+
+  "pnl": {
+    "revenue": [28053, 37993, 39967, 41763], "revenue_mgmt": [46176, 51042],
+    "ebitda":  [8168, 9747, 12552, 13750],   "ebitda_mgmt":  [15126, 16720],
+    "da":      [1805, 1756, 2082, 2339],      "da_mgmt":      [3114, 3441]
+  },
+  "cf": {
+    "nwc":      [842, 4167, 2158, 1360], "nwc_mgmt":  [82, 2061],
+    "cash_eop": [918, 3465, 7221, 8215], "cash_mgmt": [12048, 15059]
+  },
+  "capex": { "total": [3106, 2778, 3689, 4104], "total_mgmt": [6023, 5669] },
+  "debt":  { "debt":  [25999, 28493, 26965, 26773], "debt_mgmt": [27823, 26455] },
+
+  "assumptions": {
+    "interest_rate": { "value": 0.075, "rationale": "No interest disclosed; assumed 7.5% blended cost of INR corporate debt." },
+    "tax_rate":      { "value": 0.25,  "rationale": "Assumed 25% Indian effective corporate tax rate." },
+    "maint_split":   { "value": 0.65,  "rationale": "Assumed 65% maintenance / 35% growth capex split." }
+  }
+}

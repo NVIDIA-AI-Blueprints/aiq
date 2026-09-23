@@ -278,9 +278,13 @@ def release_ingestor(backend: str, ingestor: BaseIngestor) -> bool:
     """Remove one expected cached ingestor during a backend lifecycle finalizer.
 
     The identity check prevents an older finalizer from evicting a replacement
-    instance created for the same backend.
+    instance created for the same backend. The active Knowledge API ingestor is
+    process-owned and remains pinned across per-workflow finalizers.
     """
     if _INGESTOR_INSTANCES.get(backend) is not ingestor:
+        return False
+    if _ACTIVE_INGESTOR is ingestor:
+        logger.debug("Keeping active Knowledge API ingestor for backend: %s", backend)
         return False
     del _INGESTOR_INSTANCES[backend]
     logger.info("Released singleton ingestor instance for backend: %s", backend)

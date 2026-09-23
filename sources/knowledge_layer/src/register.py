@@ -659,14 +659,13 @@ async def knowledge_retrieval(config: KnowledgeRetrievalConfig, _builder: Builde
         )
     finally:
         if config.backend in {"nemo_retriever", "nemo_retriever_local"}:
-            from aiq_agent.knowledge.factory import clear_active_ingestor
-            from aiq_agent.knowledge.factory import get_active_ingestor
             from aiq_agent.knowledge.factory import release_ingestor
 
-            if get_active_ingestor() is ingestor:
-                clear_active_ingestor()
-            release_ingestor(config.backend, ingestor)
-            for component in (retriever, ingestor):
+            released_ingestor = release_ingestor(config.backend, ingestor)
+            components = [retriever]
+            if released_ingestor:
+                components.append(ingestor)
+            for component in components:
                 close = getattr(component, "close", None)
                 if callable(close):
                     try:

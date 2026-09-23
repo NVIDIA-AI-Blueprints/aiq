@@ -20,7 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VENV_DIR="$REPO_ROOT/.venv"
+VENV_DIR="${AIQ_VENV_DIR:-$REPO_ROOT/.venv}"
 
 OPENSHELL_RELEASE_TAG="$(awk -F'"' '
     $0 == "[tool.aiq.openshell]" { in_contract = 1; next }
@@ -250,6 +250,9 @@ resolve_openshell_version() {
 ensure_aiq_env() {
     cd "$REPO_ROOT"
     if [[ ! -d "$VENV_DIR" ]]; then
+        if [[ "$VENV_DIR" != "$REPO_ROOT/.venv" ]]; then
+            fail "AIQ_VENV_DIR does not exist: $VENV_DIR"
+        fi
         log "Creating AI-Q virtual environment"
         ./scripts/setup.sh
     else
@@ -259,7 +262,7 @@ ensure_aiq_env() {
 
 install_openshell_python() {
     log "Installing OpenShell Python package exactly: openshell==$OPENSHELL_VERSION"
-    uv pip install "openshell==$OPENSHELL_VERSION"
+    uv pip install --python "$VENV_DIR/bin/python" "openshell==$OPENSHELL_VERSION"
 
     local adapter_install_spec="$LANGCHAIN_NVIDIA_REPO"
     local editable_args=()
@@ -283,9 +286,10 @@ install_openshell_python() {
     fi
     local adapter_install_failed=false
     if [[ ${#adapter_install_args[@]} -eq 0 ]]; then
-        uv pip install "$adapter_install_spec" || adapter_install_failed=true
+        uv pip install --python "$VENV_DIR/bin/python" "$adapter_install_spec" || adapter_install_failed=true
     else
-        uv pip install "${adapter_install_args[@]}" "$adapter_install_spec" || adapter_install_failed=true
+        uv pip install --python "$VENV_DIR/bin/python" "${adapter_install_args[@]}" "$adapter_install_spec" \
+            || adapter_install_failed=true
     fi
     if [[ "$adapter_install_failed" == "true" ]]; then
         cat <<EOF
@@ -306,12 +310,12 @@ EOF
     # This keeps repeated setup deterministic without pretending the upstream adapter
     # metadata is compatible; `pip check` remains a documented upstream limitation.
     log "Restoring locked AI-Q dependencies while retaining optional OpenShell packages"
-    uv sync --dev --inexact
+    UV_PROJECT_ENVIRONMENT="$VENV_DIR" uv sync --dev --inexact
 
     # Adapter dependency resolution must not silently change the operator-selected
     # OpenShell SDK/CLI version. Reapply the exact pin after every dependent package.
     log "Reasserting exact OpenShell version after adapter install: openshell==$OPENSHELL_VERSION"
-    uv pip install "openshell==$OPENSHELL_VERSION"
+    uv pip install --python "$VENV_DIR/bin/python" "openshell==$OPENSHELL_VERSION"
 
     local installed
     installed="$("$VENV_DIR/bin/python" - <<'PY'
@@ -656,12 +660,11 @@ filesystem_policy:
     - /etc
     - /var/log
     - /proc
-    - /dev/urandom
+    - /dev
   read_write:
     - /sandbox
     - /workspace
     - /tmp
-    - /dev/null
 
 # hard_requirement is the production default: a missing Landlock LSM fails closed. Set
 # best_effort only for an explicit local demo that accepts loss of filesystem confinement.
@@ -761,7 +764,7 @@ build_image() {
     log "Building sandbox image: $IMAGE_NAME (sandbox log level: $SANDBOX_LOG_LEVEL)"
     "$DOCKER_BIN" build -t "$IMAGE_NAME" \
         --build-arg OPENSHELL_SANDBOX_LOG_LEVEL="$SANDBOX_LOG_LEVEL" \
-        -f "$REPO_ROOT/deploy/openshell/Dockerfile.aiq-demo" "$REPO_ROOT/deploy/openshell"
+        -f "$REPO_ROOT/deploy/openshell/Dockerfile.aiq-demo" "$REPO_ROOT"
 }
 
 diagnose_gateway_components() {
@@ -799,11 +802,12 @@ $landlock_note
 
 Validate the AI-Q config:
 
-  ${runtime_env}.venv/bin/nat validate --config_file $runtime_config
+  ${runtime_env}AIQ_VENV_DIR="$VENV_DIR" "$VENV_DIR/bin/nat" validate --config_file $runtime_config
 
 Start or verify an authenticated gateway and run its strict capability probe:
 
-  source .venv/bin/activate
+  export AIQ_VENV_DIR="$VENV_DIR"
+  source "$VENV_DIR/bin/activate"
   ./scripts/openshell/start_openshell_gateway.sh
 
 Start CLI mode after the gateway probe succeeds:

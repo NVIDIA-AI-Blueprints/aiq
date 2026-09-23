@@ -1,0 +1,33 @@
+{
+  "mode": "operating",
+  "company": "Acme Packaging",
+  "units": "(in INR mn)",
+  "start_year": 2022,
+  "n_hist": 4,
+
+  "currency": {
+    "source": "INR",
+    "reporting": "USD",
+    "unit": "m",
+    "rates": [76.0, 80.0, 83.0, 83.0],
+    "rationale": "Source data is entered in INR mn; the model displays in USD m. FX is per-period (source units per 1 USD) because the rate is not stable across years — edit any cell to re-drive that year. Historical INR/USD averages ~76/80/83/83 for FY22-FY25."
+  },
+
+  "pnl": {
+    "revenue": [28053, 37993, 39967, 41763],
+    "ebitda":  [8168, 9747, 12552, 13750],
+    "da":      [1805, 1756, 2082, 2339]
+  },
+  "cf": {
+    "nwc":      [842, 4167, 2158, 1360],
+    "cash_eop": [918, 3465, 7221, 8215]
+  },
+  "capex": { "total": [3106, 2778, 3689, 4104] },
+  "debt":  { "debt":  [25999, 28493, 26965, 26773] },
+
+  "assumptions": {
+    "interest_rate": { "value": 0.075, "rationale": "No interest expense disclosed; assumed 7.5% blended cost of INR corporate debt on the ~INR 26-28bn gross-debt balance." },
+    "tax_rate":      { "value": 0.25,  "rationale": "No tax line disclosed; assumed 25% Indian effective corporate tax rate." },
+    "maint_split":   { "value": 0.65,  "rationale": "Capex not split in the teaser; assumed 65% maintenance / 35% growth for a mature glass-plant asset base." }
+  }
+}

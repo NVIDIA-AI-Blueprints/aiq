@@ -1,0 +1,50 @@
+{
+  "mode": "operating",
+  "company": "Acme Packaging",
+  "units": "(in €m)",
+  "start_year": 2022,
+  "n_hist": 3,
+
+  "pnl": {
+    "revenue": [100.0, 120.0, 140.0]
+  },
+
+  "cf": {
+    "opening_cash": 5.0
+  },
+
+  "capex": {},
+
+  "debt": {
+    "debt": [80.0, 75.0, 70.0]
+  },
+
+  "assumptions": {
+    "ebitda_margin": {
+      "value": 0.28,
+      "rationale": "No EBITDA disclosed in the teaser; assumed 28% margin from comparable rigid-packaging peers (~29-30%)."
+    },
+    "da_pct": {
+      "value": 0.06,
+      "rationale": "No D&A line; assumed 6% of revenue given the capital-intensive plant base."
+    },
+    "interest_rate": {
+      "value": 0.075,
+      "rationale": "No interest disclosed; assumed 7.5% cost of debt on the €70-80m balance (senior + mezz blended)."
+    },
+    "tax_rate": {
+      "value": 0.25
+    },
+    "nwc_pct": {
+      "value": 0.03
+    },
+    "capex_pct": {
+      "value": 0.05,
+      "rationale": "No capex disclosed; assumed 5% of revenue (maintenance-led)."
+    },
+    "maint_split": {
+      "value": 0.70,
+      "rationale": "Assumed 70% maintenance for a steady-state plant network."
+    }
+  }
+}
