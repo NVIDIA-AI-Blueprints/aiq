@@ -15,10 +15,17 @@
 
 """Tests for data_source_registry module."""
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
+import yaml
 
 from aiq_agent.common.data_source_registry import DataSourceEntry
 from aiq_agent.common.data_source_registry import DataSourceMeta
+from aiq_agent.common.data_source_registry import DataSourceRegistryConfig
+from aiq_agent.common.data_source_registry import data_source_registry_fn
 from aiq_agent.common.data_source_registry import get_all_sources
 from aiq_agent.common.data_source_registry import get_all_tool_refs
 from aiq_agent.common.data_source_registry import get_source
@@ -334,3 +341,27 @@ class TestDataSourceEntry:
     def test_requires_auth_set_true(self):
         entry = DataSourceEntry(id="eci", name="ECI", requires_auth=True)
         assert entry.requires_auth is True
+
+
+@pytest.mark.parametrize("agent_name", ["shallow_research_agent", "deep_research_agent"])
+async def test_getting_started_notebook_registers_research_tools(agent_name):
+    """The notebook's generated config must enable source capture for both research paths."""
+    notebook_path = Path(__file__).resolve().parents[3] / "docs/notebooks/0_Getting_Started_with_AIQ.ipynb"
+    notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+    config_cells = [
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code"
+        and "".join(cell["source"]).startswith("%%writefile config_simple_researcher.yml\n")
+    ]
+    assert len(config_cells) == 1
+    config = yaml.safe_load(config_cells[0].split("\n", 1)[1])
+    functions = config["functions"]
+    registry_config = DataSourceRegistryConfig.model_validate(functions["data_sources"])
+
+    # Exercise the same typed registration entry point NAT uses during workflow setup.
+    async with data_source_registry_fn(registry_config, SimpleNamespace(_function_groups={})):
+        assert get_source("web_search") is not None
+        for tool_name in functions[agent_name]["tools"]:
+            assert tool_name in functions
+            assert get_source_id_for_tool(tool_name) == "web_search"
