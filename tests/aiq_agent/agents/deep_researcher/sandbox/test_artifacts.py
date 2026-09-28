@@ -343,12 +343,14 @@ class _FakeS3Client:
             pass
 
     def __init__(self) -> None:
+        """Track stored objects and injectable provider failures."""
         self.objects: dict[tuple[str, str], bytes] = {}
         self.fail_put = False
         self.fail_delete = False
         self.head_bucket_calls: list[str] = []
 
     def put_object(self, **kwargs: Any) -> None:
+        """Store object bytes or simulate an upload failure."""
         if self.fail_put:
             raise RuntimeError("upload failed")
         location = (kwargs["Bucket"], kwargs["Key"])
@@ -363,12 +365,14 @@ class _FakeS3Client:
         return {"Body": _FakeStreamingBody(data)}
 
     def delete_object(self, **kwargs: Any) -> None:
+        """Delete stored bytes or simulate a provider failure."""
         if self.fail_delete:
             raise RuntimeError("delete failed")
         location = (kwargs["Bucket"], kwargs["Key"])
         self.objects.pop(location, None)
 
     def head_bucket(self, **kwargs: Any) -> None:
+        """Record bucket validation requests."""
         self.head_bucket_calls.append(kwargs["Bucket"])
 
 
