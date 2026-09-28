@@ -21,10 +21,12 @@ class ArtifactStreamingResponse(StreamingResponse):
     """Own the artifact iterator across prefetch, streaming, and cancellation."""
 
     def __init__(self, content: Iterator[bytes], **kwargs: Any) -> None:
+        """Keep the provider iterator available for deterministic cleanup."""
         self._content = content
         super().__init__(content, **kwargs)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Prefetch before headers and close the iterator on every exit path."""
         try:
             try:
                 # AnyIO waits for the worker before honoring cancellation, so an

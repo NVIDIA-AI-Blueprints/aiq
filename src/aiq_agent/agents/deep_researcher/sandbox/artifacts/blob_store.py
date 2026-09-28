@@ -141,6 +141,7 @@ class S3ArtifactBlobStore(ArtifactBlobStore):
         )
 
     def open_bytes(self, artifact: Artifact) -> Iterator[bytes]:
+        """Stream object bytes, distinguishing missing content from provider errors."""
         bucket, key = self._location(artifact.storage_uri)
         try:
             response = self._client.get_object(Bucket=bucket, Key=key)

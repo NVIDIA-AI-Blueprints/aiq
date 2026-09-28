@@ -355,6 +355,7 @@ class _FakeS3Client:
         self.objects[location] = kwargs["Body"]
 
     def get_object(self, **kwargs: Any) -> dict[str, Any]:
+        """Model S3's missing-key error and streaming response body."""
         try:
             data = self.objects[(kwargs["Bucket"], kwargs["Key"])]
         except KeyError as exc:

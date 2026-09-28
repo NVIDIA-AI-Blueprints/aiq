@@ -303,6 +303,7 @@ async def test_artifact_response_preserves_empty_and_chunked_content(chunks):
     closed = []
 
     def content():
+        """Record cleanup of the simulated provider stream."""
         try:
             yield from chunks
         finally:
@@ -311,6 +312,7 @@ async def test_artifact_response_preserves_empty_and_chunked_content(chunks):
     sent = []
 
     async def send(message):
+        """Capture the response status and bytes sent through ASGI."""
         sent.append(message)
 
     await ArtifactStreamingResponse(content())({"type": "http", "asgi": {"spec_version": "2.4"}}, AsyncMock(), send)
@@ -329,6 +331,7 @@ async def test_artifact_response_does_not_send_second_status_on_late_error():
     closed = []
 
     def content():
+        """Record cleanup of the simulated provider stream."""
         try:
             yield b"first"
             raise FileNotFoundError("late read failure")
@@ -338,6 +341,7 @@ async def test_artifact_response_does_not_send_second_status_on_late_error():
     sent = []
 
     async def send(message):
+        """Capture the response status and bytes sent through ASGI."""
         sent.append(message)
 
     with pytest.raises(ClientDisconnect):
@@ -360,6 +364,7 @@ async def test_artifact_response_closes_prefetch_when_cancelled():
     closed = []
 
     def content():
+        """Record cleanup of the simulated provider stream."""
         try:
             started.set()
             assert release.wait(2)
@@ -368,6 +373,7 @@ async def test_artifact_response_closes_prefetch_when_cancelled():
             closed.append(True)
 
     async def run():
+        """Run the response under the task group's cancellation scope."""
         await ArtifactStreamingResponse(content())(
             {"type": "http", "asgi": {"spec_version": "2.4"}}, AsyncMock(), AsyncMock()
         )
