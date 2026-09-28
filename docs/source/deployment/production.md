@@ -173,6 +173,10 @@ Configure credentials through workload identity, deployment secrets, or the stan
 AWS credential chain. When the provider is `s3`, artifact bytes are stored in the
 configured bucket and SQL stores artifact metadata only.
 
+Missing S3 artifact objects return HTTP 404 before download streaming begins.
+Provider authorization and transport errors remain server errors; a missing object
+does not trigger metadata deletion or automatic reconciliation.
+
 ### S3 Security Responsibility
 
 The S3-compatible artifact store is operator-managed infrastructure. AI-Q authorizes
