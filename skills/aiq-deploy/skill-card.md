@@ -19,7 +19,7 @@ Risk: Review before execution as proposals could introduce incorrect or misleadi
 Mitigation: Review and scan skill before deployment. <br>
 
 ## Reference(s): <br>
-- [NVIDIA AI-Q Blueprint Repository](https://github.com/NVIDIA-AI-Blueprints/aiq) <br>
+- [NVIDIA AI-Q Blueprint Repository](https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent) <br>
 - [locate-or-clone.md](references/locate-or-clone.md) <br>
 - [env-and-secrets.md](references/env-and-secrets.md) <br>
 - [configs.md](references/configs.md) <br>

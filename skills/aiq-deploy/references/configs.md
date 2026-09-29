@@ -47,4 +47,4 @@ For local process modes, pass repository-relative paths to the start script:
 ./scripts/start_e2e.sh --config_file configs/config_web_default_llamaindex.yml
 ```
 
-For Helm, the chart values use `CONFIG_FILE` to select an in-image config path. Do not claim arbitrary external config-file mounting is supported unless the chart values and templates have been inspected for the target release. If the user needs a custom Helm config file, explain that this is the gap tracked by `https://github.com/NVIDIA-AI-Blueprints/aiq/issues/243` and use documented ConfigMap and volume-mount behavior only when it is explicitly available.
+For Helm, the chart values use `CONFIG_FILE` to select an in-image config path. Do not claim arbitrary external config-file mounting is supported unless the chart values and templates have been inspected for the target release. If the user needs a custom Helm config file, explain that this is the gap tracked by `https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent/issues/243` and use documented ConfigMap and volume-mount behavior only when it is explicitly available.

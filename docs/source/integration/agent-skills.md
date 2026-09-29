@@ -11,7 +11,7 @@ AI-Q includes portable Agent Skills for coding harnesses that support skill-styl
 
 AI-Q ships two distinct skill sets, separated by audience. This page documents
 the **API-consumer** skills. The maintainer skills are documented in their own
-[README](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/.agents/skills/README.md).
+[README](https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent/blob/develop/.agents/skills/README.md).
 
 | | API-consumer skills | Maintainer skills |
 | :-- | :-- | :-- |
@@ -94,7 +94,7 @@ After the skills are installed, users can ask their coding harness for AI-Q acti
 | "AIQ research this topic" | `aiq-research` treats the request as research intent, not install intent. |
 | "deploy AI-Q" | `aiq-deploy` asks which deployment mode the user wants, then validates the selected path and returns `AIQ_SERVER_URL`. |
 | "install deep research" | `aiq-deploy` asks which AI-Q deployment mode the user wants before starting services. |
-| "clone AIQ and run it" | `aiq-deploy` locates or clones `NVIDIA-AI-Blueprints/aiq`, checks required environment values, then starts the selected default deployment. |
+| "clone AIQ and run it" | `aiq-deploy` locates or clones `NVIDIA-AI-Blueprints/deep-researcher-agent`, checks required environment values, then starts the selected default deployment. |
 | "start the AI-Q UI" | `aiq-deploy` starts a deployment mode that includes the browser UI, such as local E2E or full Docker Compose. |
 | "run AI-Q with Docker Compose" | `aiq-deploy` follows the Docker Compose path. For Agent Skill backend use, it should start `aiq-agent` and dependencies without the frontend unless the user asks for UI. |
 | "deploy AI-Q with Helm" | `aiq-deploy` follows the Kubernetes/Helm path and requires the user to provide or confirm cluster, namespace, registry, secret, ingress, and storage choices. |
@@ -105,7 +105,7 @@ After the skills are installed, users can ask their coding harness for AI-Q acti
 ## Prerequisites
 
 - Python 3.11, 3.12, or 3.13.
-- For `aiq-deploy`: access to this repository or permission to clone `https://github.com/NVIDIA-AI-Blueprints/aiq`, plus the selected runtime such as Docker Compose, Node/npm for local web mode, or kubectl/Helm for Kubernetes mode.
+- For `aiq-deploy`: access to this repository or permission to clone `https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent`, plus the selected runtime such as Docker Compose, Node/npm for local web mode, or kubectl/Helm for Kubernetes mode.
 - For `aiq-research`: a local or self-hosted AI-Q Blueprint server, usually at `http://localhost:8000`. Set `AIQ_SERVER_URL` only when using a different local or self-hosted server URL.
 
 ## Install From the NVIDIA Skills Catalog
@@ -142,7 +142,7 @@ ln -s ../../skills/aiq-research .claude/skills/aiq-research
 ```
 
 The maintainer-skill symlinks are managed alongside the maintainer skill set;
-refer to the [maintainer skills README](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/.agents/skills/README.md) for how
+refer to the [maintainer skills README](https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent/blob/develop/.agents/skills/README.md) for how
 those are added.
 
 For a user-level install:

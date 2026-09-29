@@ -253,7 +253,7 @@ const APPEARANCE_SEGMENTS: { mode: ThemeMode; label: string }[] = [
   { mode: 'light', label: 'Light' },
 ]
 
-const DOCS_URL = 'https://github.com/NVIDIA-AI-Blueprints/aiq/tree/develop/docs'
+const DOCS_URL = 'https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent/tree/develop/docs'
 
 const AppearanceThemeControl: FC = () => {
   const theme = useLayoutStore((s) => s.theme)

@@ -28,7 +28,7 @@ If these files exist, work from that repository root.
 If no checkout exists, clone the public AI-Q repository:
 
 ```bash
-git clone https://github.com/NVIDIA-AI-Blueprints/aiq.git
+git clone https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent.git aiq
 ```
 
 Then enter the checkout and verify:

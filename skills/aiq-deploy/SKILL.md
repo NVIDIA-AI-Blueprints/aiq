@@ -11,7 +11,7 @@ compatibility: |
 metadata:
   version: "2.2.0"
   author: "NVIDIA AI-Q Blueprint Team <aiq-blueprint@nvidia.com>"
-  github-url: "https://github.com/NVIDIA-AI-Blueprints/aiq"
+  github-url: "https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent"
   tags:
     - nvidia
     - aiq
@@ -37,7 +37,7 @@ The workflow stays explicit so deployment validation and handoff are repeatable 
 
 Users need:
 
-- Access to clone or update `https://github.com/NVIDIA-AI-Blueprints/aiq`.
+- Access to clone or update `https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent`.
 - Git available in the shell.
 - One deployment runtime:
   - Docker Engine with Docker Compose v2 for the default durable local deployment.

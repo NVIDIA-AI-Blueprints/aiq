@@ -326,9 +326,9 @@ supplies user identity to jobs. Raw NAT CLI runs do not provide that browser OAu
 an unauthenticated or service-account MCP configuration for standalone CLI execution.
 
 For a local Redis-backed stack, use the
-[per-user-auth Compose override](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/deploy/compose/README.md#per-user-mcp-authentication).
+[per-user-auth Compose override](https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent/blob/develop/deploy/compose/README.md#per-user-mcp-authentication).
 For a released chart, provide an external Redis service as described in the
-[Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/deploy/helm/README.md#per-user-mcp-authentication-with-external-redis).
+[Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent/blob/develop/deploy/helm/README.md#per-user-mcp-authentication-with-external-redis).
 The default Compose and Helm deployments remain Redis-free when this example is not selected.
 
 Refer to the

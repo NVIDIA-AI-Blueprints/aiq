@@ -15,7 +15,7 @@ compatibility: |
 metadata:
   version: "2.2.0"
   author: "NVIDIA AI-Q Blueprint Team <aiq-blueprint@nvidia.com>"
-  github-url: "https://github.com/NVIDIA-AI-Blueprints/aiq"
+  github-url: "https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent"
   tags:
     - nvidia
     - aiq

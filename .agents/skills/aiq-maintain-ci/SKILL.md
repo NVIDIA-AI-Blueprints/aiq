@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: Claude Code, Codex, Cursor, OpenCode, and Agent Skills-compatible tools.
 metadata:
   version: "0.1.0"
-  source-repo: "NVIDIA-AI-Blueprints/aiq"
+  source-repo: "NVIDIA-AI-Blueprints/deep-researcher-agent"
   tags: "aiq ci github-actions pre-commit governance skill-eval"
 allowed-tools: Read Bash Edit
 ---

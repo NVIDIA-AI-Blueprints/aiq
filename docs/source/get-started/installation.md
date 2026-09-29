@@ -45,7 +45,7 @@ self-hosted Lightning option.
 The setup script handles everything -- virtual environment, Python dependencies, and UI dependencies:
 
 ```bash
-git clone https://github.com/NVIDIA-AI-Blueprints/aiq.git
+git clone https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent.git aiq
 cd aiq
 
 ./scripts/setup.sh
@@ -76,7 +76,7 @@ If you prefer to install components selectively, follow these steps.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/NVIDIA-AI-Blueprints/aiq.git
+git clone https://github.com/NVIDIA-AI-Blueprints/deep-researcher-agent.git aiq
 cd aiq
 ```
 
