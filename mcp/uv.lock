@@ -169,7 +169,7 @@ wheels = [
 ]
 
 [[package]]
-name = "aiq-agent"
+name = "deep-researcher-agent"
 version = "2.2.0"
 source = { editable = "../" }
 dependencies = [
@@ -250,10 +250,10 @@ provides-extras = ["pii", "s3", "sandboxed-python-test", "dev", "docs", "viz"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "aiq-api", editable = "../frontends/aiq_api" },
-    { name = "aiq-debug", editable = "../frontends/debug" },
-    { name = "aiq-gsf", editable = "../sources/gsf" },
-    { name = "aiq-research-cli", editable = "../frontends/cli" },
+    { name = "deep-researcher-api", editable = "../frontends/deep_researcher_api" },
+    { name = "deep-researcher-debug", editable = "../frontends/debug" },
+    { name = "deep-researcher-gsf", editable = "../sources/gsf" },
+    { name = "deep-researcher-research-cli", editable = "../frontends/cli" },
     { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
     { name = "duckduckgo-news-search", editable = "../sources/duckduckgo_news_search" },
     { name = "exa-web-search", editable = "../sources/exa_web_search" },
@@ -274,11 +274,11 @@ dev = [
 ]
 
 [[package]]
-name = "aiq-mcp-server"
+name = "deep-researcher-mcp-server"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "aiq-agent" },
+    { name = "deep-researcher-agent" },
     { name = "asyncpg" },
     { name = "langchain-core" },
     { name = "mcp" },
@@ -301,7 +301,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiq-agent", editable = "../" },
+    { name = "deep-researcher-agent", editable = "../" },
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
     { name = "langchain-core", specifier = ">=1.2.0,<2" },
