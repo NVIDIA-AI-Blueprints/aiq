@@ -121,7 +121,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
               <Logo kind="logo-only" size="small" />
 
               <Text kind="label/semibold/lg" className="text-primary whitespace-nowrap">
-                AI-Q
+                Deep Researcher Agent
               </Text>
             </Flex>
           </Button>
